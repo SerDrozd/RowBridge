@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}RowBridge | Reconcile two CSV exports{% endblock %}
+{% block content %}
+<section class="hero">
+  <p class="eyebrow">Local-first reconciliation</p>
+  <h1>Find the rows that refer to the same real record.</h1>
+  <p class="lede">Upload two CSV exports, map the fields that should agree, and inspect explainable matches without sending data to an external service.</p>
+</section>
+
+<section class="panel">
+  <form action="/prepare" method="post" enctype="multipart/form-data" class="stack">
+    <div class="file-grid">
+      <label class="file-card">
+        <span class="label">Side A</span>
+        <strong>First CSV export</strong>
+        <input type="file" name="file_a" accept=".csv,text/csv" required>
+      </label>
+      <label class="file-card">
+        <span class="label">Side B</span>
+        <strong>Second CSV export</strong>
+        <input type="file" name="file_b" accept=".csv,text/csv" required>
+      </label>
+    </div>
+    <p class="hint">Current scope: UTF-8 CSV files up to 5 MB and 50,000 rows each.</p>
+    <button type="submit">Continue to field mapping</button>
+  </form>
+</section>
+{% endblock %}

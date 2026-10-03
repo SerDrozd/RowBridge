@@ -1,0 +1,6 @@
+reference,payer,total,paid_at
+INV00123,ACME Limited,1249.99,2026-09-29
+INV-00124,Northwind Studio,840.50,2026-09-28
+INV00125,Orbit Labs LLC,199.99,2026-09-30
+INV-00999,Blue Finch GmbH,460.00,2026-09-30
+INV-00888,Unknown Buyer,35.00,2026-10-01

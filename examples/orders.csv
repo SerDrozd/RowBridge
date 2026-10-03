@@ -1,0 +1,6 @@
+invoice_ref,customer,amount,invoice_date
+INV-00123,Acme LTD,1250.00,2026-09-28
+INV-00124,Northwind Studio,840.50,2026-09-28
+INV-00125,Orbit Labs,199.99,2026-09-29
+INV-00126,Blue Finch GmbH,460.00,2026-09-30
+INV-00127,Redwood Retail,75.25,2026-10-01

@@ -1,0 +1,60 @@
+:root {
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #162033;
+  background: #f5f7fb;
+  font-synthesis: none;
+}
+* { box-sizing: border-box; }
+body { margin: 0; }
+a { color: inherit; }
+.shell { width: min(1120px, calc(100% - 32px)); margin: 0 auto; }
+.topbar { display: flex; align-items: center; gap: 14px; min-height: 68px; }
+.brand { font-size: 20px; font-weight: 800; text-decoration: none; letter-spacing: -0.03em; }
+.tagline { color: #6f7b90; font-size: 14px; }
+.hero { padding: 70px 0 34px; max-width: 780px; }
+.eyebrow { margin: 0 0 10px; text-transform: uppercase; letter-spacing: .13em; font-size: 12px; font-weight: 800; color: #52606f; }
+h1 { margin: 0; font-size: clamp(36px, 6vw, 64px); line-height: 1.02; letter-spacing: -0.045em; }
+.lede { font-size: 19px; line-height: 1.65; color: #5f6b7d; max-width: 720px; }
+.panel { background: white; border: 1px solid #e3e8f1; border-radius: 18px; padding: 24px; box-shadow: 0 16px 45px rgba(25, 40, 70, .06); margin-bottom: 42px; }
+.stack { display: grid; gap: 22px; }
+.file-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.file-card { padding: 20px; border: 1px solid #d8dfeb; border-radius: 14px; display: grid; gap: 8px; background: #fbfcfe; }
+.file-card input { margin-top: 8px; }
+.label { display: block; font-size: 12px; text-transform: uppercase; letter-spacing: .09em; font-weight: 800; color: #657186; }
+.hint { margin: 2px 0 0; color: #778399; font-size: 13px; line-height: 1.5; }
+button, .button { border: 0; border-radius: 10px; padding: 12px 17px; background: #17213a; color: white; font: inherit; font-weight: 750; cursor: pointer; width: fit-content; text-decoration: none; }
+.button.secondary { background: white; color: #17213a; border: 1px solid #d5ddea; }
+.page-heading { padding: 54px 0 26px; }
+.page-heading h1 { font-size: clamp(32px, 5vw, 50px); }
+.page-heading > p:last-child { color: #6f7b90; }
+.result-heading { display: flex; justify-content: space-between; align-items: end; gap: 24px; }
+.mapping-block { display: grid; grid-template-columns: minmax(240px, 1.4fr) 1fr 1fr; gap: 14px; align-items: center; padding-bottom: 20px; border-bottom: 1px solid #edf0f5; }
+select, input[type="number"] { width: 100%; border: 1px solid #cfd7e5; border-radius: 9px; padding: 11px 12px; background: white; font: inherit; color: #17213a; }
+.settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 220px)); gap: 14px; }
+.settings-grid label { display: grid; gap: 7px; font-size: 13px; font-weight: 700; }
+.summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-bottom: 18px; }
+.metric { background: white; border: 1px solid #e2e7ef; border-radius: 14px; padding: 18px; }
+.metric span { display: block; color: #758196; font-size: 13px; }
+.metric strong { display: block; margin-top: 8px; font-size: 30px; letter-spacing: -0.03em; }
+.table-panel { padding: 0; overflow: hidden; }
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; min-width: 900px; }
+th, td { padding: 15px 16px; border-bottom: 1px solid #edf0f5; text-align: left; vertical-align: top; }
+th { background: #fafbfc; font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: #6d788b; }
+td { font-size: 14px; }
+td strong, td small { display: block; }
+td small { margin-top: 4px; color: #8993a4; }
+.status { display: inline-block; padding: 5px 8px; border-radius: 999px; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; background: #eef2f7; }
+.status.auto_matched { background: #e8f6ef; color: #17613b; }
+.status.review { background: #fff4d7; color: #7b5710; }
+.status.unmatched { background: #f7e9eb; color: #8a3240; }
+.evidence { min-width: 320px; color: #4d596c; }
+.evidence div + div { margin-top: 5px; }
+.evidence span { color: #8a94a5; font-size: 12px; }
+.muted { color: #96a0b0; }
+@media (max-width: 760px) {
+  .file-grid, .summary-grid { grid-template-columns: 1fr; }
+  .mapping-block { grid-template-columns: 1fr; }
+  .result-heading { align-items: start; flex-direction: column; }
+  .settings-grid { grid-template-columns: 1fr; }
+}

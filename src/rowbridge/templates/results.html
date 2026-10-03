@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Reconciliation results | RowBridge{% endblock %}
+{% block content %}
+<section class="page-heading result-heading">
+  <div>
+    <p class="eyebrow">Run {{ run.id[:8] }}</p>
+    <h1>Reconciliation results</h1>
+    <p>{{ run.filename_a }} ↔ {{ run.filename_b }}</p>
+  </div>
+  <a class="button secondary" href="/runs/{{ run.id }}/export.csv">Export CSV</a>
+</section>
+
+<section class="summary-grid">
+  <div class="metric"><span>Auto matched</span><strong>{{ run.auto_count }}</strong></div>
+  <div class="metric"><span>Needs review</span><strong>{{ run.review_count }}</strong></div>
+  <div class="metric"><span>Unmatched rows</span><strong>{{ run.unmatched_count }}</strong></div>
+  <div class="metric"><span>Source rows</span><strong>{{ run.total_a + run.total_b }}</strong></div>
+</section>
+
+<section class="panel table-panel">
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Status</th><th>Score</th><th>Side A</th><th>Side B</th><th>Why</th></tr>
+      </thead>
+      <tbody>
+      {% for match in matches %}
+        <tr>
+          <td><span class="status {{ match.status.value }}">{{ match.status.value|replace('_', ' ') }}</span></td>
+          <td>{% if match.score %}{{ "%.0f"|format(match.score * 100) }}%{% else %}·{% endif %}</td>
+          <td>
+            {% if match.a_payload %}
+              <strong>{{ display_value(match, 'a', run.mapping.primary_a) }}</strong>
+              <small>row {{ match.a_row_number }}</small>
+            {% else %}<span class="muted">No row</span>{% endif %}
+          </td>
+          <td>
+            {% if match.b_payload %}
+              <strong>{{ display_value(match, 'b', run.mapping.primary_b) }}</strong>
+              <small>row {{ match.b_row_number }}</small>
+            {% else %}<span class="muted">No row</span>{% endif %}
+          </td>
+          <td class="evidence">
+            {% if match.evidence %}
+              {% for item in match.evidence %}<div>{{ item.detail }} <span>+{{ "%.0f"|format(item.score * 100) }}</span></div>{% endfor %}
+            {% else %}<span class="muted">No candidate above review threshold.</span>{% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
