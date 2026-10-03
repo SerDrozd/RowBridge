@@ -34,6 +34,12 @@ def parse_date(value: str) -> date | None:
     stripped = value.strip()
     if not stripped:
         return None
+
+    try:
+        return datetime.fromisoformat(stripped).date()
+    except ValueError:
+        pass
+
     for format_string in _DATE_FORMATS:
         try:
             return datetime.strptime(stripped, format_string).date()

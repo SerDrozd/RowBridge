@@ -62,6 +62,26 @@ def test_reconcile_matches_cyrillic_primary_values() -> None:
     assert decisions[0].score == 1.0
 
 
+def test_score_pair_accepts_excel_datetime_text_for_date_rule() -> None:
+    mapping = FieldMapping(
+        primary_a="ref",
+        primary_b="reference",
+        date_a="date",
+        date_b="paid_at",
+    )
+
+    score, evidence = score_pair(
+        {"ref": "INV-001", "date": "2026-10-02"},
+        {"reference": "INV001", "paid_at": "2026-10-02 00:00:00"},
+        mapping,
+        MatchSettings(),
+    )
+
+    assert score == 1.0
+    date_evidence = next(item for item in evidence if item.field == "date")
+    assert "difference 0 day(s)" in date_evidence.detail
+
+
 def test_build_rules_uses_typed_comparators_and_expected_weights() -> None:
     mapping = FieldMapping(
         primary_a="ref",
