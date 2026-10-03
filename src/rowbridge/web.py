@@ -16,6 +16,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import RequestResponseEndpoint
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from rowbridge import __version__
 from rowbridge.config import Settings
 from rowbridge.exports import build_reconciliation_csv, build_reconciliation_xlsx
 from rowbridge.ingestion import (
@@ -126,7 +127,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     repository.initialize()
     templates = Jinja2Templates(directory=PACKAGE_DIR / "templates")
 
-    app = FastAPI(title="RowBridge", version="0.6.0")
+    app = FastAPI(title="RowBridge", version=__version__)
     app.add_middleware(
         TrustedHostMiddleware,
         allowed_hosts=["127.0.0.1", "localhost", "testserver"],

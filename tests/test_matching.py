@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from rowbridge.candidates import generate_candidates
 from rowbridge.matching import (
     build_rules,
@@ -5,13 +7,117 @@ from rowbridge.matching import (
     reconcile_with_diagnostics,
     score_pair,
 )
-from rowbridge.matching_utils import normalize_text
+from rowbridge.matching_utils import normalize_text, parse_amount
 from rowbridge.models import CsvTable, FieldMapping, MatchSettings, MatchStatus, RuleKind
 
 
 def test_normalize_text_removes_case_spacing_and_punctuation() -> None:
     assert normalize_text(" INV-00123 ") == "inv00123"
     assert normalize_text("ACME, Ltd.") == "acmeltd"
+
+
+def test_normalize_text_preserves_unicode_letters() -> None:
+    assert normalize_text(
+        "\u0422\u041e\u0412 \u00ab\u041a\u0438\u0457\u0432-2026\u00bb"
+    ) == "\u0442\u043e\u0432\u043a\u0438\u0457\u04322026"
+    assert normalize_text(
+        "Caf\u00e9, S\u00e3o Paulo!"
+    ) == "caf\u00e9s\u00e3opaulo"
+    assert normalize_text("Cafe\u0301") == "caf\u00e9"
+
+
+def test_reconcile_matches_cyrillic_primary_values() -> None:
+    table_a = CsvTable(
+        filename="a.csv",
+        headers=("name",),
+        rows=(
+            {
+                "name": (
+                    "\u0422\u041e\u0412 "
+                    "\u00ab\u0420\u043e\u043c\u0430\u0448\u043a\u0430\u00bb"
+                )
+            },
+        ),
+    )
+    table_b = CsvTable(
+        filename="b.csv",
+        headers=("name",),
+        rows=(
+            {
+                "name": (
+                    "\u0442\u043e\u0432 "
+                    "\u0440\u043e\u043c\u0430\u0448\u043a\u0430"
+                )
+            },
+        ),
+    )
+
+    decisions = reconcile(
+        table_a,
+        table_b,
+        FieldMapping(primary_a="name", primary_b="name"),
+        MatchSettings(),
+    )
+
+    assert len(decisions) == 1
+    assert decisions[0].status == MatchStatus.AUTO_MATCHED
+    assert decisions[0].score == 1.0
+
+
+def test_parse_amount_supports_common_decimal_and_grouping_formats() -> None:
+    assert parse_amount("1234.56") == Decimal("1234.56")
+    assert parse_amount("1234,56") == Decimal("1234.56")
+    assert parse_amount("1,234.56") == Decimal("1234.56")
+    assert parse_amount("1.234,56") == Decimal("1234.56")
+    assert parse_amount("12,345,678.90") == Decimal("12345678.90")
+    assert parse_amount("12.345.678,90") == Decimal("12345678.90")
+
+
+def test_parse_amount_preserves_accounting_parentheses_as_negative() -> None:
+    assert parse_amount("(1,234.56)") == Decimal("-1234.56")
+    assert parse_amount("(1.234,56)") == Decimal("-1234.56")
+    assert parse_amount("($1,234.56)") == Decimal("-1234.56")
+    assert parse_amount("-(1,234.56)") is None
+
+
+def test_score_pair_matches_amounts_with_different_locale_separators() -> None:
+    mapping = FieldMapping(
+        primary_a="ref",
+        primary_b="reference",
+        amount_a="amount",
+        amount_b="total",
+    )
+
+    score, evidence = score_pair(
+        {"ref": "INV-001", "amount": "1.234,56"},
+        {"reference": "INV001", "total": "1,234.56"},
+        mapping,
+        MatchSettings(),
+    )
+
+    assert score == 1.0
+    amount_evidence = next(item for item in evidence if item.field == "amount")
+    assert "difference 0.00" in amount_evidence.detail
+
+
+def test_score_pair_accepts_excel_datetime_text_for_date_rule() -> None:
+    mapping = FieldMapping(
+        primary_a="ref",
+        primary_b="reference",
+        date_a="date",
+        date_b="paid_at",
+    )
+
+    score, evidence = score_pair(
+        {"ref": "INV-001", "date": "2026-10-02"},
+        {"reference": "INV001", "paid_at": "2026-10-02 00:00:00"},
+        mapping,
+        MatchSettings(),
+    )
+
+    assert score == 1.0
+    date_evidence = next(item for item in evidence if item.field == "date")
+    assert "difference 0 day(s)" in date_evidence.detail
 
 
 def test_build_rules_uses_typed_comparators_and_expected_weights() -> None:
@@ -34,6 +140,44 @@ def test_build_rules_uses_typed_comparators_and_expected_weights() -> None:
         RuleKind.DATE_WINDOW,
     ]
     assert sum(rule.weight for rule in rules) == 1.0
+
+
+def test_optional_rules_keep_base_weights_before_normalization() -> None:
+    mapping = FieldMapping(
+        primary_a="ref",
+        primary_b="reference",
+        amount_a="amount",
+        amount_b="total",
+        date_a="date",
+        date_b="paid",
+    )
+
+    rules = build_rules(mapping, MatchSettings())
+
+    assert [(rule.field, rule.weight) for rule in rules] == [
+        ("primary", 0.55),
+        ("amount", 0.15),
+        ("date", 0.10),
+    ]
+
+
+def test_score_pair_normalizes_remaining_rule_weights() -> None:
+    mapping = FieldMapping(
+        primary_a="ref",
+        primary_b="reference",
+        amount_a="amount",
+        amount_b="total",
+    )
+
+    score, evidence = score_pair(
+        {"ref": "INV-001", "amount": "10.00"},
+        {"reference": "INV001", "total": "11.00"},
+        mapping,
+        MatchSettings(),
+    )
+
+    assert score == 0.785714
+    assert [item.score for item in evidence] == [0.785714, 0.0]
 
 
 def test_score_pair_uses_primary_secondary_amount_and_date_evidence() -> None:

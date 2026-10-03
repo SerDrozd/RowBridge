@@ -31,17 +31,13 @@ class _RuleResult:
 
 
 def build_rules(mapping: FieldMapping, settings: MatchSettings) -> tuple[ComparisonRule, ...]:
-    has_secondary = bool(mapping.secondary_a and mapping.secondary_b)
-    primary_weight = 0.55 if has_secondary else 0.70
-    amount_weight = 0.15 if has_secondary else 0.20
-
     rules = [
         ComparisonRule(
             field="primary",
             column_a=mapping.primary_a,
             column_b=mapping.primary_b,
             kind=RuleKind.FUZZY_TEXT,
-            weight=primary_weight,
+            weight=0.55,
         )
     ]
     if mapping.secondary_a and mapping.secondary_b:
@@ -61,7 +57,7 @@ def build_rules(mapping: FieldMapping, settings: MatchSettings) -> tuple[Compari
                 column_a=mapping.amount_a,
                 column_b=mapping.amount_b,
                 kind=RuleKind.NUMERIC_TOLERANCE,
-                weight=amount_weight,
+                weight=0.15,
                 tolerance=settings.amount_tolerance,
             )
         )
