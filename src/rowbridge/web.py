@@ -126,7 +126,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     repository.initialize()
     templates = Jinja2Templates(directory=PACKAGE_DIR / "templates")
 
-    app = FastAPI(title="RowBridge", version="0.5.2")
+    app = FastAPI(title="RowBridge", version="0.6.0")
     app.add_middleware(
         TrustedHostMiddleware,
         allowed_hosts=["127.0.0.1", "localhost", "testserver"],

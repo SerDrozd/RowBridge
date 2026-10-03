@@ -4,12 +4,21 @@ build-backend = "hatchling.build"
 
 [project]
 name = "rowbridge"
-version = "0.5.2"
-description = "Local-first workbench for reconciling messy CSV and Excel exports with explainable matching."
+version = "0.6.0"
+description = "Local-first CSV and Excel reconciliation with explainable matching and human review."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { file = "LICENSE" }
 authors = [{ name = "Serhii Drozdov" }]
+keywords = ["reconciliation", "csv", "excel", "entity-resolution", "data-quality"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Office/Business",
+  "Topic :: Utilities",
+]
 dependencies = [
   "fastapi>=0.118,<1",
   "jinja2>=3.1,<4",
@@ -18,6 +27,10 @@ dependencies = [
   "rapidfuzz>=3.14,<4",
   "uvicorn>=0.37,<1",
 ]
+
+[project.urls]
+Repository = "https://github.com/SerDrozd/rowbridge"
+Issues = "https://github.com/SerDrozd/rowbridge/issues"
 
 [project.optional-dependencies]
 dev = [
