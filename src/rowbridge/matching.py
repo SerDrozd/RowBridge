@@ -211,17 +211,30 @@ def _score_candidates(
     )
 
 
+def _candidate_competitors(
+    candidates: tuple[CandidateScore, ...],
+) -> tuple[dict[int, tuple[CandidateScore, ...]], dict[int, tuple[CandidateScore, ...]]]:
+    by_a_lists: dict[int, list[CandidateScore]] = {}
+    by_b_lists: dict[int, list[CandidateScore]] = {}
+    for candidate in candidates:
+        by_a_lists.setdefault(candidate.a_index, []).append(candidate)
+        by_b_lists.setdefault(candidate.b_index, []).append(candidate)
+    by_a = {key: tuple(items) for key, items in by_a_lists.items()}
+    by_b = {key: tuple(items) for key, items in by_b_lists.items()}
+    return by_a, by_b
+
+
 def _is_ambiguous(
     candidate: CandidateScore,
-    candidates: tuple[CandidateScore, ...],
+    by_a: dict[int, tuple[CandidateScore, ...]],
+    by_b: dict[int, tuple[CandidateScore, ...]],
     margin: float,
 ) -> bool:
-    for alternative in candidates:
+    alternatives = (*by_a.get(candidate.a_index, ()), *by_b.get(candidate.b_index, ()))
+    for alternative in alternatives:
         if alternative is candidate:
             continue
-        shares_a = alternative.a_index == candidate.a_index
-        shares_b = alternative.b_index == candidate.b_index
-        if (shares_a or shares_b) and candidate.score - alternative.score < margin:
+        if candidate.score - alternative.score < margin:
             return True
     return False
 
@@ -234,6 +247,7 @@ def reconcile_with_diagnostics(
 ) -> tuple[tuple[MatchDecision, ...], CandidateGeneration]:
     generation = generate_candidates(table_a, table_b, mapping, settings)
     candidates = _score_candidates(table_a, table_b, mapping, settings, generation)
+    candidates_by_a, candidates_by_b = _candidate_competitors(candidates)
 
     selected: list[MatchDecision] = []
     used_a: set[int] = set()
@@ -242,7 +256,12 @@ def reconcile_with_diagnostics(
     for candidate in candidates:
         if candidate.a_index in used_a or candidate.b_index in used_b:
             continue
-        ambiguous = _is_ambiguous(candidate, candidates, settings.ambiguity_margin)
+        ambiguous = _is_ambiguous(
+            candidate,
+            candidates_by_a,
+            candidates_by_b,
+            settings.ambiguity_margin,
+        )
         status = (
             MatchStatus.AUTO_MATCHED
             if candidate.score >= settings.auto_threshold and not ambiguous

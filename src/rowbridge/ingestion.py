@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import csv
 import io
+import re
+import shutil
+import time
 from datetime import date, datetime
 from pathlib import Path
 from zipfile import BadZipFile, ZipFile
@@ -232,6 +235,41 @@ def read_staged_input(path: Path, original_filename: str) -> CsvTable:
     if not path.is_file():
         raise InputFileError("Staged upload was not found. Upload the files again.")
     return parse_input_bytes(path.read_bytes(), original_filename)
+
+
+
+_STAGE_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
+
+
+def discard_staged_upload(stage_dir: Path) -> None:
+    if stage_dir.is_dir():
+        shutil.rmtree(stage_dir, ignore_errors=True)
+
+
+def cleanup_staged_uploads(
+    upload_dir: Path,
+    max_age_seconds: int,
+    *,
+    now: float | None = None,
+) -> int:
+    if max_age_seconds < 0:
+        raise ValueError("max_age_seconds cannot be negative")
+    if not upload_dir.is_dir():
+        return 0
+
+    cutoff = (time.time() if now is None else now) - max_age_seconds
+    removed = 0
+    for child in upload_dir.iterdir():
+        if not child.is_dir() or not _STAGE_ID_PATTERN.fullmatch(child.name):
+            continue
+        try:
+            modified = child.stat().st_mtime
+        except OSError:
+            continue
+        if modified < cutoff:
+            discard_staged_upload(child)
+            removed += 1
+    return removed
 
 
 def preview_rows(table: CsvTable) -> tuple[dict[str, str], ...]:

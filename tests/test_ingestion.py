@@ -81,3 +81,29 @@ def test_rejects_csv_with_extra_values() -> None:
 def test_staged_input_path_does_not_use_user_filename(tmp_path: Path) -> None:
     assert staged_filename("a", "../../unsafe.csv") == "a.csv"
     assert staged_filename("b", "strange name.xlsx") == "b.xlsx"
+
+
+def test_cleanup_staged_uploads_removes_only_expired_stage_directories(tmp_path: Path) -> None:
+    import os
+
+    from rowbridge.ingestion import cleanup_staged_uploads
+
+    upload_dir = tmp_path / "uploads"
+    old_stage = upload_dir / ("a" * 32)
+    fresh_stage = upload_dir / ("b" * 32)
+    unrelated = upload_dir / "keep-me"
+    old_stage.mkdir(parents=True)
+    fresh_stage.mkdir()
+    unrelated.mkdir()
+    (old_stage / "metadata.json").write_text("{}", encoding="utf-8")
+    (fresh_stage / "metadata.json").write_text("{}", encoding="utf-8")
+
+    os.utime(old_stage, (100.0, 100.0))
+    os.utime(fresh_stage, (950.0, 950.0))
+
+    removed = cleanup_staged_uploads(upload_dir, 100, now=1000.0)
+
+    assert removed == 1
+    assert not old_stage.exists()
+    assert fresh_stage.is_dir()
+    assert unrelated.is_dir()

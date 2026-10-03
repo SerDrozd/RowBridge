@@ -23,10 +23,14 @@ It is aimed at operational data work where a clean shared ID is missing or incon
 - manually link one unmatched Side A row to one unmatched Side B row;
 - store human review actions separately from algorithmic matching evidence;
 - filter results by review, matched, or unmatched state;
-- persist runs, source rows, current match state, and review history in SQLite;
+- paginate large result sets instead of rendering every match in one response;
+- persist runs, source rows, current match state, and review history in SQLite with WAL mode and a busy timeout;
 - reopen a saved run after an application restart;
 - export the current reconciliation state as CSV;
-- export an XLSX workbook with summary, reconciliation, unmatched, and review-history sheets.
+- export an XLSX workbook with summary, reconciliation, unmatched, and review-history sheets;
+- bound upload reads before parsing, expire stale staged files, and delete staging copies after a run is created;
+- reject duplicate field-role selections and obviously invalid amount/date mappings before matching;
+- apply local-only browser protections such as trusted-host checks, cross-origin POST rejection, CSP, and no-store responses.
 
 The application does not modify either source file and does not make network calls for matching.
 
@@ -60,17 +64,25 @@ CSV input supports comma, semicolon, tab, and pipe delimiters. Delimiters are de
 
 XLSX files are opened read-only. RowBridge uses the first worksheet that contains a non-empty header and at least one data row, and shows the selected sheet name in the preview. Workbook archives are checked before parsing and rejected if their expanded size exceeds the safety limit.
 
-Current input limits are 5 MB, 50,000 data rows, and 200 columns per file. `.xls`, password-protected workbooks, multi-sheet selection, and arbitrary text encodings are intentionally outside the current scope.
+Current input limits are 5 MB, 50,000 data rows, and 200 columns per file. The HTTP upload path reads only up to the configured file limit plus one byte before rejecting an oversized file, so a large request is not first loaded into application memory in full. `.xls`, password-protected workbooks, multi-sheet selection, and arbitrary text encodings are intentionally outside the current scope.
 
 ## Matching behavior
 
 RowBridge builds typed comparison rules from the selected field mapping. With all four rule types selected, primary text contributes 55% of the score, secondary text 20%, amount 15%, and date 10%. When the secondary field is not selected, the primary/amount/date weights are 70%/20%/10%. Missing optional rule types are removed and the remaining weights are normalized.
 
-Candidate generation uses normalized primary blocks first, then optional secondary and amount/date support blocks. Exact normalized primary values take the shortest path. If no block yields a candidate, RowBridge performs a small fuzzy fallback rather than silently declaring the row unmatched. Candidate sets are capped per source row.
+Candidate generation uses normalized primary blocks first, then optional secondary and amount/date support blocks. Exact normalized primary values take the shortest path. If no block yields a candidate, RowBridge performs a small fuzzy fallback on bounded data sets rather than silently declaring the row unmatched. The global fallback scan is disabled once Side B is large enough that an all-against-all fuzzy scan would become unsafe, and candidate sets are capped per source row.
 
 Support fields do not automatically rescue a clearly unrelated primary value. A lower primary similarity can only be rescued when a strong secondary-text match is present together with amount or date support. This keeps common amounts and dates from filling the review queue with unrelated pairs.
 
-One-to-one selection is global and deterministic. A selected pair is sent to review when its score is below the auto threshold or another candidate for either source row is within the ambiguity margin.
+One-to-one selection is global and deterministic. Ambiguity checks use per-row competitor indexes rather than scanning the entire candidate list for every selected pair. A selected pair is sent to review when its score is below the auto threshold or another candidate for either source row is within the ambiguity margin.
+
+## Operational hardening
+
+Result pages are bounded to 100 rows at a time, while exports still contain the complete current reconciliation state. Small unmatched sets keep the convenient dropdown-based manual-link workflow; large unmatched sets switch to exact source-row-number inputs so the browser does not need to render thousands of `<option>` elements. Review history shown in the UI is limited to the latest 100 actions, while workbook exports retain the complete audit trail.
+
+Staged uploads are temporary. A successful run removes its staged source copies immediately, and stale stage directories are removed automatically after 24 hours. SQLite uses foreign keys, WAL mode, a five-second busy timeout, and normal synchronous mode for safer local concurrency.
+
+The web app binds to `127.0.0.1` by default. Requests use trusted-host checks, mutation requests reject foreign browser origins, pages are sent with `Cache-Control: no-store`, and responses include a restrictive Content Security Policy plus frame, referrer, content-type, camera, microphone, and geolocation protections.
 
 ## Human review behavior
 
@@ -101,7 +113,7 @@ uv run mypy src tests
 uv run pytest
 ```
 
-The test suite covers typed comparison rules, candidate pruning, fuzzy fallback, support-field rescue rules, one-to-one competition, CSV delimiter and encoding handling, XLSX ingestion, input validation, review acceptance and rejection, manual links, persisted audit history, result filters, CSV/XLSX exports, and the full web flow from upload through SQLite persistence.
+The test suite covers typed comparison rules, candidate pruning, bounded fuzzy fallback, large exact-match sets, support-field rescue rules, one-to-one competition, CSV delimiter and encoding handling, XLSX ingestion, upload limits, stage cleanup, semantic mapping validation, review acceptance and rejection, manual links, paginated persistence queries, large unmatched workflows, safety headers, cross-origin protection, CSV/XLSX exports, and the full web flow from upload through SQLite persistence.
 
 ## Project structure
 
@@ -121,7 +133,7 @@ src/rowbridge/
 
 ## Privacy
 
-Files are processed on the machine running RowBridge. The matching path has no external API dependency. Source files are read-only inputs; RowBridge writes its own staged copies, SQLite state, review history, and explicit exports under its application data directory.
+Files are processed on the machine running RowBridge. The matching path has no external API dependency. Source files are read-only inputs; RowBridge writes temporary staged copies, SQLite state, review history, and explicit exports under its application data directory. Staged copies are removed after a successful run and stale stages are expired automatically.
 
 ## Limitations
 

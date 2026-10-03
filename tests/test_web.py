@@ -184,8 +184,8 @@ def test_home_file_picker_only_uses_explicit_browse_labels(tmp_path: Path) -> No
     assert 'data-file-trigger="rb-file-b"' in response.text
     assert 'hidden id="rb-file-a"' in response.text
     assert 'hidden id="rb-file-b"' in response.text
-    assert 'app.css?v=m4.5' in response.text
-    assert 'app.js?v=m4.5' in response.text
+    assert 'app.css?v=m5' in response.text
+    assert 'app.js?v=m5' in response.text
     assert 'class="file-input"' not in response.text
 
 def test_prepare_rejects_unsupported_files(tmp_path: Path) -> None:
@@ -296,3 +296,266 @@ def test_prepare_rejects_unsupported_file_type_with_clear_error(tmp_path: Path) 
     )
     assert response.status_code == 400
     assert "Use a .csv or .xlsx file" in response.text
+
+
+def test_responses_include_local_safety_headers(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    response = client.get("/")
+
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["x-frame-options"] == "DENY"
+    assert response.headers["referrer-policy"] == "no-referrer"
+    assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
+
+
+def test_local_post_allows_unusual_origin_when_fetch_metadata_is_same_origin(
+    tmp_path: Path,
+) -> None:
+    app = create_app(Settings(data_dir=tmp_path / "data"))
+    client = TestClient(app, base_url="http://127.0.0.1:8000")
+    response = client.post(
+        "/prepare",
+        headers={
+            "origin": "null",
+            "sec-fetch-site": "same-origin",
+        },
+        files={
+            "file_a": ("orders.csv", A_CSV, "text/csv"),
+            "file_b": ("payments.csv", B_CSV, "text/csv"),
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Map the fields that mean the same thing" in response.text
+
+
+def test_local_post_without_fetch_metadata_remains_compatible(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    response = client.post(
+        "/prepare",
+        headers={"origin": "null"},
+        files={
+            "file_a": ("orders.csv", A_CSV, "text/csv"),
+            "file_b": ("payments.csv", B_CSV, "text/csv"),
+        },
+    )
+
+    assert response.status_code == 200
+
+
+def test_cross_site_post_is_rejected_by_fetch_metadata(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    response = client.post(
+        "/prepare",
+        headers={
+            "origin": "https://example.com",
+            "sec-fetch-site": "cross-site",
+        },
+        files={
+            "file_a": ("orders.csv", A_CSV, "text/csv"),
+            "file_b": ("payments.csv", B_CSV, "text/csv"),
+        },
+    )
+
+    assert response.status_code == 403
+    assert "Cross-site requests are not allowed" in response.text
+
+
+def test_oversized_upload_is_rejected_before_parsing(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    too_large = b"a" * (5 * 1024 * 1024 + 1)
+    response = client.post(
+        "/prepare",
+        files={
+            "file_a": ("orders.csv", too_large, "text/csv"),
+            "file_b": ("payments.csv", B_CSV, "text/csv"),
+        },
+    )
+
+    assert response.status_code == 400
+    assert "larger than 5 MB" in response.text
+
+
+def test_successful_run_removes_staged_upload(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    prepared = client.post(
+        "/prepare",
+        files={
+            "file_a": ("orders.csv", A_CSV, "text/csv"),
+            "file_b": ("payments.csv", B_CSV, "text/csv"),
+        },
+    )
+    stage_match = re.search(r'data-stage-id="([a-f0-9]+)"', prepared.text)
+    assert stage_match is not None
+    stage_id = stage_match.group(1)
+    stage_dir = tmp_path / "data" / "uploads" / stage_id
+    assert stage_dir.is_dir()
+
+    created = client.post(
+        "/runs",
+        data={
+            "stage_id": stage_id,
+            "primary_a": "invoice_ref",
+            "primary_b": "reference",
+            "secondary_a": "customer",
+            "secondary_b": "payer",
+            "amount_a": "amount",
+            "amount_b": "total",
+            "date_a": "date",
+            "date_b": "paid_at",
+            "amount_tolerance": "0.05",
+            "date_window_days": "2",
+        },
+        follow_redirects=False,
+    )
+
+    assert created.status_code == 303
+    assert not stage_dir.exists()
+
+
+def test_duplicate_mapping_roles_return_clear_error(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    prepared = client.post(
+        "/prepare",
+        files={
+            "file_a": ("orders.csv", A_CSV, "text/csv"),
+            "file_b": ("payments.csv", B_CSV, "text/csv"),
+        },
+    )
+    stage_match = re.search(r'data-stage-id="([a-f0-9]+)"', prepared.text)
+    assert stage_match is not None
+
+    response = client.post(
+        "/runs",
+        data={
+            "stage_id": stage_match.group(1),
+            "primary_a": "invoice_ref",
+            "primary_b": "reference",
+            "secondary_a": "invoice_ref",
+            "secondary_b": "reference",
+            "amount_tolerance": "0.05",
+            "date_window_days": "2",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "same column for more than one matching role" in response.text
+
+
+def test_wrong_amount_column_is_rejected_instead_of_silently_scoring_bad_data(
+    tmp_path: Path,
+) -> None:
+    client = make_client(tmp_path)
+    prepared = client.post(
+        "/prepare",
+        files={
+            "file_a": ("orders.csv", A_CSV, "text/csv"),
+            "file_b": ("payments.csv", B_CSV, "text/csv"),
+        },
+    )
+    stage_match = re.search(r'data-stage-id="([a-f0-9]+)"', prepared.text)
+    assert stage_match is not None
+
+    response = client.post(
+        "/runs",
+        data={
+            "stage_id": stage_match.group(1),
+            "primary_a": "customer",
+            "primary_b": "payer",
+            "amount_a": "invoice_ref",
+            "amount_b": "reference",
+            "amount_tolerance": "0.05",
+            "date_window_days": "2",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "does not look like an amount column" in response.text.lower()
+
+
+def test_invalid_view_uses_html_error_page(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    location = create_sample_run(client)
+
+    response = client.get(f"{location}?view=not-a-view")
+
+    assert response.status_code == 400
+    assert "Request could not be completed" in response.text
+    assert "Unknown result view" in response.text
+
+
+def test_results_route_paginates_large_runs(tmp_path: Path) -> None:
+    from datetime import UTC, datetime
+
+    from rowbridge.models import FieldMapping, MatchDecision, MatchSettings, MatchStatus
+    from rowbridge.storage import Repository
+
+    client = make_client(tmp_path)
+    repository = Repository(tmp_path / "data" / "rowbridge.sqlite3")
+    rows = tuple({"id": f"ITEM-{index:03d}"} for index in range(125))
+    decisions = tuple(
+        MatchDecision(index, index, 1.0, MatchStatus.AUTO_MATCHED, ())
+        for index in range(125)
+    )
+    run_id = "c" * 32
+    repository.save_run(
+        run_id=run_id,
+        created_at=datetime.now(UTC).isoformat(timespec="seconds"),
+        filename_a="a.csv",
+        filename_b="b.csv",
+        mapping=FieldMapping(primary_a="id", primary_b="id"),
+        settings=MatchSettings(),
+        rows_a=rows,
+        rows_b=rows,
+        decisions=decisions,
+    )
+
+    page_two = client.get(f"/runs/{run_id}?page=2")
+
+    assert page_two.status_code == 200
+    assert "125 rows in this view" in page_two.text
+    assert "ITEM-100" in page_two.text
+    assert "ITEM-000" not in page_two.text
+    assert "Previous" in page_two.text
+
+
+def test_large_unmatched_sets_switch_manual_link_to_source_row_inputs(tmp_path: Path) -> None:
+    from datetime import UTC, datetime
+
+    from rowbridge.models import FieldMapping, MatchDecision, MatchSettings, MatchStatus
+    from rowbridge.storage import Repository
+
+    client = make_client(tmp_path)
+    repository = Repository(tmp_path / "data" / "rowbridge.sqlite3")
+    rows_a = tuple({"id": f"A-{index:03d}"} for index in range(201))
+    rows_b = tuple({"id": f"B-{index:03d}"} for index in range(201))
+    decisions = tuple(
+        [
+            MatchDecision(index, None, 0.0, MatchStatus.UNMATCHED, ())
+            for index in range(201)
+        ]
+        + [
+            MatchDecision(None, index, 0.0, MatchStatus.UNMATCHED, ())
+            for index in range(201)
+        ]
+    )
+    run_id = "d" * 32
+    repository.save_run(
+        run_id=run_id,
+        created_at=datetime.now(UTC).isoformat(timespec="seconds"),
+        filename_a="a.csv",
+        filename_b="b.csv",
+        mapping=FieldMapping(primary_a="id", primary_b="id"),
+        settings=MatchSettings(),
+        rows_a=rows_a,
+        rows_b=rows_b,
+        decisions=decisions,
+    )
+
+    response = client.get(f"/runs/{run_id}")
+
+    assert response.status_code == 200
+    assert 'name="a_row_number"' in response.text
+    assert 'name="b_row_number"' in response.text
+    assert "This run has many unmatched rows" in response.text

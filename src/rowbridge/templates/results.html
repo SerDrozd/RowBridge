@@ -31,7 +31,7 @@
           <a class="{% if active_view == 'matched' %}active{% endif %}" href="/runs/{{ run.id }}?view=matched">Matched</a>
           <a class="{% if active_view == 'unmatched' %}active{% endif %}" href="/runs/{{ run.id }}?view=unmatched">Unmatched</a>
         </nav>
-        <p>Scores are suggestions until confirmed.</p>
+        <p>{{ total_results }} row{% if total_results != 1 %}s{% endif %} in this view</p>
       </div>
 
       <div class="table-scroll results-table-wrap">
@@ -51,23 +51,42 @@
           </tbody>
         </table>
       </div>
+
+      {% if total_pages > 1 %}
+      <nav class="pagination" aria-label="Result pages">
+        {% if page > 1 %}<a href="/runs/{{ run.id }}?view={{ active_view }}&page={{ page - 1 }}">Previous</a>{% endif %}
+        {% for page_number in pagination_pages %}
+          <a class="{% if page_number == page %}active{% endif %}" href="/runs/{{ run.id }}?view={{ active_view }}&page={{ page_number }}">{{ page_number }}</a>
+        {% endfor %}
+        {% if page < total_pages %}<a href="/runs/{{ run.id }}?view={{ active_view }}&page={{ page + 1 }}">Next</a>{% endif %}
+      </nav>
+      {% endif %}
     </section>
 
     <aside class="review-panel">
-      <section>
+      <section id="manual-link">
         <p class="eyebrow">Manual resolution</p>
         <h2>Link unmatched rows</h2>
         <p class="panel-help">Use this only when you know the two records refer to the same real item.</p>
-        {% if unmatched_a and unmatched_b %}
-        <form class="manual-link-form" method="post" action="/runs/{{ run.id }}/manual-links">
-          <label><span>Side A row</span><select name="a_match_id" required>{% for match in unmatched_a %}<option value="{{ match.id }}">row {{ match.a_row_number }} · {{ display_value(match, 'a', run.mapping.primary_a) }}</option>{% endfor %}</select></label>
-          <label><span>Side B row</span><select name="b_match_id" required>{% for match in unmatched_b %}<option value="{{ match.id }}">row {{ match.b_row_number }} · {{ display_value(match, 'b', run.mapping.primary_b) }}</option>{% endfor %}</select></label>
-          <button class="button button-secondary" type="submit">Create manual link</button>
-        </form>
+        {% if unmatched_a_count and unmatched_b_count %}
+          {% if manual_row_mode %}
+          <form class="manual-link-form" method="post" action="/runs/{{ run.id }}/manual-links">
+            <p class="panel-help">This run has many unmatched rows. Enter the source row numbers from the original files.</p>
+            <label><span>Side A source row</span><input type="number" min="2" name="a_row_number" required></label>
+            <label><span>Side B source row</span><input type="number" min="2" name="b_row_number" required></label>
+            <button class="button button-secondary" type="submit">Create manual link</button>
+          </form>
+          {% else %}
+          <form class="manual-link-form" method="post" action="/runs/{{ run.id }}/manual-links">
+            <label><span>Side A row</span><select name="a_match_id" required>{% for match in unmatched_a %}<option value="{{ match.id }}">row {{ match.a_row_number }} · {{ display_value(match, 'a', run.mapping.primary_a) }}</option>{% endfor %}</select></label>
+            <label><span>Side B row</span><select name="b_match_id" required>{% for match in unmatched_b %}<option value="{{ match.id }}">row {{ match.b_row_number }} · {{ display_value(match, 'b', run.mapping.primary_b) }}</option>{% endfor %}</select></label>
+            <button class="button button-secondary" type="submit">Create manual link</button>
+          </form>
+          {% endif %}
         {% else %}<p class="muted panel-empty">A manual link needs an unmatched row on each side.</p>{% endif %}
       </section>
 
-      <section class="history-section">
+      <section class="history-section" id="review-history">
         <p class="eyebrow">Audit trail</p>
         <h2>Review history</h2>
         <div class="history-list">

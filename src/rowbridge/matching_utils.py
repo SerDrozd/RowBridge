@@ -18,6 +18,8 @@ def parse_amount(value: str) -> Decimal | None:
     cleaned = value.strip().replace(" ", "")
     if not cleaned:
         return None
+    if any(character.isalpha() for character in cleaned):
+        return None
     if cleaned.count(",") == 1 and "." not in cleaned:
         cleaned = cleaned.replace(",", ".")
     else:

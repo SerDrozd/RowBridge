@@ -2,19 +2,27 @@ from __future__ import annotations
 
 import io
 import json
+import math
+import re
 from pathlib import Path
 from typing import Annotated
 from uuid import uuid4
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.base import RequestResponseEndpoint
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from rowbridge.config import Settings
 from rowbridge.exports import build_reconciliation_csv, build_reconciliation_xlsx
 from rowbridge.ingestion import (
+    MAX_UPLOAD_BYTES,
     InputFileError,
+    cleanup_staged_uploads,
+    discard_staged_upload,
     parse_input_bytes,
     preview_rows,
     read_staged_input,
@@ -26,11 +34,14 @@ from rowbridge.service import create_reconciliation_run
 from rowbridge.storage import Repository, StoredMatch
 
 PACKAGE_DIR = Path(__file__).resolve().parent
-MATCHED_STATUSES = {
+STAGE_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
+MATCHED_STATUSES = (
     MatchStatus.AUTO_MATCHED,
     MatchStatus.CONFIRMED,
     MatchStatus.MANUAL_MATCHED,
-}
+)
+MAX_AMOUNT_TOLERANCE = 1_000_000_000.0
+MAX_DATE_WINDOW_DAYS = 3650
 
 
 def _optional_column(value: str) -> str | None:
@@ -57,15 +68,15 @@ def _table_details(table: CsvTable) -> str:
     return f"CSV · {table.encoding or 'unknown encoding'} · {delimiter} delimiter"
 
 
-def _filter_matches(matches: tuple[StoredMatch, ...], view: str) -> tuple[StoredMatch, ...]:
+def _statuses_for_view(view: str) -> tuple[MatchStatus, ...] | None:
     if view == "all":
-        return matches
+        return None
     if view == "review":
-        return tuple(match for match in matches if match.status == MatchStatus.REVIEW)
+        return (MatchStatus.REVIEW,)
     if view == "matched":
-        return tuple(match for match in matches if match.status in MATCHED_STATUSES)
+        return MATCHED_STATUSES
     if view == "unmatched":
-        return tuple(match for match in matches if match.status == MatchStatus.UNMATCHED)
+        return (MatchStatus.UNMATCHED,)
     raise ValueError("Unknown result view")
 
 
@@ -77,15 +88,96 @@ def _stage_metadata(stage_dir: Path) -> dict[str, str]:
     return {str(key): str(value) for key, value in raw.items()}
 
 
+async def _read_upload_limited(upload: UploadFile, filename: str) -> bytes:
+    try:
+        content = await upload.read(MAX_UPLOAD_BYTES + 1)
+    finally:
+        await upload.close()
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise InputFileError(f"{filename} is larger than 5 MB")
+    return content
+
+
+def _validate_tolerances(amount_tolerance: float, date_window_days: int) -> None:
+    if not math.isfinite(amount_tolerance):
+        raise ValueError("Amount tolerance must be a finite number")
+    if amount_tolerance < 0 or amount_tolerance > MAX_AMOUNT_TOLERANCE:
+        raise ValueError(
+            f"Amount tolerance must be between 0 and {MAX_AMOUNT_TOLERANCE:,.0f}"
+        )
+    if date_window_days < 0 or date_window_days > MAX_DATE_WINDOW_DAYS:
+        raise ValueError(
+            f"Date window must be between 0 and {MAX_DATE_WINDOW_DAYS:,} days"
+        )
+
+
+def _pagination_window(page: int, total_pages: int) -> tuple[int, ...]:
+    start = max(1, page - 2)
+    end = min(total_pages, page + 2)
+    return tuple(range(start, end + 1))
+
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     app_settings = settings or Settings.from_env()
     app_settings.ensure_directories()
+    cleanup_staged_uploads(app_settings.upload_dir, app_settings.stage_ttl_seconds)
     repository = Repository(app_settings.database_path)
     repository.initialize()
     templates = Jinja2Templates(directory=PACKAGE_DIR / "templates")
 
-    app = FastAPI(title="RowBridge", version="0.4.0")
+    app = FastAPI(title="RowBridge", version="0.5.2")
+    app.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=["127.0.0.1", "localhost", "testserver"],
+    )
     app.mount("/static", StaticFiles(directory=PACKAGE_DIR / "static"), name="static")
+
+    @app.middleware("http")
+    async def local_safety_headers(
+        request: Request,
+        call_next: RequestResponseEndpoint,
+    ) -> Response:
+        if request.method not in {"GET", "HEAD", "OPTIONS"}:
+            # Browser Fetch Metadata is a better fit for this loopback-only app than
+            # strict Origin equality. Some browsers/extensions can emit unusual Origin
+            # values for local form submissions; Sec-Fetch-Site still distinguishes
+            # an ordinary same-origin form POST from a cross-site request.
+            fetch_site = request.headers.get("sec-fetch-site", "").lower()
+            if fetch_site == "cross-site":
+                return HTMLResponse("Cross-site requests are not allowed.", status_code=403)
+
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; base-uri 'none'; form-action 'self'; "
+            "frame-ancestors 'none'; img-src 'self' data:"
+        )
+        if not request.url.path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.exception_handler(HTTPException)
+    async def http_error(request: Request, exc: HTTPException) -> HTMLResponse:
+        return templates.TemplateResponse(
+            request=request,
+            name="error.html",
+            context={"status_code": exc.status_code, "message": str(exc.detail)},
+            status_code=exc.status_code,
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(request: Request, exc: RequestValidationError) -> HTMLResponse:
+        message = "The submitted form contains an invalid or missing value."
+        return templates.TemplateResponse(
+            request=request,
+            name="error.html",
+            context={"status_code": 422, "message": message},
+            status_code=422,
+        )
 
     @app.get("/", response_class=HTMLResponse)
     def home(request: Request) -> HTMLResponse:
@@ -97,11 +189,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         file_a: Annotated[UploadFile, File()],
         file_b: Annotated[UploadFile, File()],
     ) -> HTMLResponse:
+        cleanup_staged_uploads(app_settings.upload_dir, app_settings.stage_ttl_seconds)
         filename_a = file_a.filename or "side-a.csv"
         filename_b = file_b.filename or "side-b.csv"
-        content_a = await file_a.read()
-        content_b = await file_b.read()
         try:
+            content_a = await _read_upload_limited(file_a, filename_a)
+            content_b = await _read_upload_limited(file_b, filename_b)
             table_a = parse_input_bytes(content_a, filename_a)
             table_b = parse_input_bytes(content_b, filename_b)
             staged_a = staged_filename("a", filename_a)
@@ -153,7 +246,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         amount_tolerance: float = Form(0.05),
         date_window_days: int = Form(2),
     ) -> RedirectResponse:
-        if not stage_id.isalnum():
+        if STAGE_ID_PATTERN.fullmatch(stage_id) is None:
             raise HTTPException(status_code=400, detail="Invalid staged upload id")
         stage_dir = app_settings.upload_dir / stage_id
         try:
@@ -164,11 +257,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             staged_b = metadata.get("staged_b", "b.csv")
             table_a = read_staged_input(stage_dir / staged_a, filename_a)
             table_b = read_staged_input(stage_dir / staged_b, filename_b)
-        except (InputFileError, KeyError, json.JSONDecodeError) as exc:
+            _validate_tolerances(amount_tolerance, date_window_days)
+        except (InputFileError, KeyError, json.JSONDecodeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-        if amount_tolerance < 0 or date_window_days < 0:
-            raise HTTPException(status_code=400, detail="Tolerances cannot be negative")
 
         mapping = FieldMapping(
             primary_a=primary_a,
@@ -195,29 +286,63 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+        discard_staged_upload(stage_dir)
         return RedirectResponse(url=f"/runs/{run_id}", status_code=303)
 
     @app.get("/runs/{run_id}", response_class=HTMLResponse)
-    def results(request: Request, run_id: str, view: str = "all") -> HTMLResponse:
+    def results(
+        request: Request,
+        run_id: str,
+        view: str = "all",
+        page: int = 1,
+    ) -> HTMLResponse:
+        if page < 1:
+            raise HTTPException(status_code=400, detail="Page number must be positive")
         run = repository.get_run(run_id)
         if run is None:
             raise HTTPException(status_code=404, detail="Run not found")
-        all_matches = repository.list_matches(run_id)
         try:
-            visible_matches = _filter_matches(all_matches, view)
+            statuses = _statuses_for_view(view)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-        unmatched_a = tuple(
-            match
-            for match in all_matches
-            if match.status == MatchStatus.UNMATCHED and match.a_payload is not None
+        total_results = repository.count_matches(run_id, statuses)
+        page_size = app_settings.results_page_size
+        total_pages = max(1, math.ceil(total_results / page_size))
+        if total_results and page > total_pages:
+            raise HTTPException(status_code=404, detail="Result page not found")
+        visible_matches = repository.list_matches(
+            run_id,
+            statuses,
+            limit=page_size,
+            offset=(page - 1) * page_size,
         )
-        unmatched_b = tuple(
-            match
-            for match in all_matches
-            if match.status == MatchStatus.UNMATCHED and match.b_payload is not None
+
+        unmatched_a_count = repository.count_unmatched_side(run_id, "a")
+        unmatched_b_count = repository.count_unmatched_side(run_id, "b")
+        manual_row_mode = (
+            unmatched_a_count > app_settings.manual_link_select_limit
+            or unmatched_b_count > app_settings.manual_link_select_limit
         )
+        unmatched_a = (
+            ()
+            if manual_row_mode
+            else repository.list_unmatched_side(
+                run_id,
+                "a",
+                limit=app_settings.manual_link_select_limit,
+            )
+        )
+        unmatched_b = (
+            ()
+            if manual_row_mode
+            else repository.list_unmatched_side(
+                run_id,
+                "b",
+                limit=app_settings.manual_link_select_limit,
+            )
+        )
+
         return templates.TemplateResponse(
             request=request,
             name="results.html",
@@ -225,10 +350,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "run": run,
                 "summary": repository.get_summary(run_id),
                 "matches": visible_matches,
-                "events": repository.list_review_events(run_id),
+                "events": repository.list_review_events(run_id, limit=100),
                 "unmatched_a": unmatched_a,
                 "unmatched_b": unmatched_b,
+                "unmatched_a_count": unmatched_a_count,
+                "unmatched_b_count": unmatched_b_count,
+                "manual_row_mode": manual_row_mode,
                 "active_view": view,
+                "page": page,
+                "total_pages": total_pages,
+                "total_results": total_results,
+                "pagination_pages": _pagination_window(page, total_pages),
                 "display_value": _display_value,
                 "payload_value": _payload_value,
             },
@@ -257,11 +389,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/runs/{run_id}/manual-links")
     def manual_link(
         run_id: str,
-        a_match_id: Annotated[int, Form()],
-        b_match_id: Annotated[int, Form()],
+        a_match_id: Annotated[int | None, Form()] = None,
+        b_match_id: Annotated[int | None, Form()] = None,
+        a_row_number: Annotated[int | None, Form()] = None,
+        b_row_number: Annotated[int | None, Form()] = None,
     ) -> RedirectResponse:
         if repository.get_run(run_id) is None:
             raise HTTPException(status_code=404, detail="Run not found")
+
+        if a_match_id is None or b_match_id is None:
+            if a_row_number is None or b_row_number is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Choose one unmatched row from each side",
+                )
+            a_match = repository.get_unmatched_match_by_row(run_id, "a", a_row_number)
+            b_match = repository.get_unmatched_match_by_row(run_id, "b", b_row_number)
+            if a_match is None or b_match is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail="One of the requested unmatched source rows was not found",
+                )
+            a_match_id = a_match.id
+            b_match_id = b_match.id
+
         try:
             repository.create_manual_link(run_id, a_match_id, b_match_id)
         except ValueError as exc:

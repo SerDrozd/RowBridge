@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "rowbridge"
-version = "0.4.0"
+version = "0.5.2"
 description = "Local-first workbench for reconciling messy CSV and Excel exports with explainable matching."
 readme = "README.md"
 requires-python = ">=3.12"

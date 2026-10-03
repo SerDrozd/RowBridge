@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Error | RowBridge{% endblock %}
+{% block content %}
+<section class="page error-page">
+  <div class="error-panel">
+    <p class="eyebrow">Request could not be completed</p>
+    <h1>{{ status_code }}</h1>
+    <p>{{ message }}</p>
+    <div class="error-actions">
+      <a class="button button-secondary" href="/">Back to start</a>
+      <a class="button button-primary" href="/">Start a new reconciliation</a>
+    </div>
+  </div>
+</section>
+{% endblock %}

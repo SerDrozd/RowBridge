@@ -204,3 +204,47 @@ def test_primary_only_mapping_can_auto_match_exact_values() -> None:
     assert len(decisions) == 1
     assert decisions[0].status == MatchStatus.AUTO_MATCHED
     assert decisions[0].score == 1.0
+
+
+def test_large_inputs_skip_unbounded_global_fuzzy_fallback() -> None:
+    table_a = CsvTable(filename="a.csv", headers=("id",), rows=({"id": "NO-MATCH-HERE"},))
+    table_b = CsvTable(
+        filename="b.csv",
+        headers=("id",),
+        rows=tuple({"id": f"B-{index:05d}"} for index in range(5_001)),
+    )
+    settings = MatchSettings(fallback_scan_limit=5_000)
+
+    generation = generate_candidates(
+        table_a,
+        table_b,
+        FieldMapping(primary_a="id", primary_b="id"),
+        settings,
+    )
+
+    assert generation.by_a == ((),)
+    assert generation.fallback_rows == 0
+
+
+def test_reconcile_scales_to_thousands_of_exact_one_to_one_candidates() -> None:
+    row_count = 2_000
+    table_a = CsvTable(
+        filename="a.csv",
+        headers=("id",),
+        rows=tuple({"id": f"ITEM-{index:05d}"} for index in range(row_count)),
+    )
+    table_b = CsvTable(
+        filename="b.csv",
+        headers=("id",),
+        rows=tuple({"id": f"ITEM{index:05d}"} for index in range(row_count)),
+    )
+
+    decisions = reconcile(
+        table_a,
+        table_b,
+        FieldMapping(primary_a="id", primary_b="id"),
+        MatchSettings(),
+    )
+
+    assert len(decisions) == row_count
+    assert all(decision.status == MatchStatus.AUTO_MATCHED for decision in decisions)

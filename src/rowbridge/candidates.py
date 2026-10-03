@@ -112,7 +112,12 @@ def generate_candidates(
                 if amount_bucket is not None and date_bucket is not None:
                     candidates.update(support_blocks.get((amount_bucket, date_bucket), ()))
 
-        if not candidates and primary and normalized_b:
+        if (
+            not candidates
+            and primary
+            and normalized_b
+            and len(normalized_b) <= settings.fallback_scan_limit
+        ):
             fallback_rows += 1
             matches = process.extract(
                 primary,

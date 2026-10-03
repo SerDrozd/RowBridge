@@ -61,6 +61,7 @@ class MatchSettings:
     rescue_secondary_similarity: float = 0.88
     max_candidates_per_row: int = 30
     fallback_candidates: int = 5
+    fallback_scan_limit: int = 5_000
 
 
 @dataclass(frozen=True, slots=True)

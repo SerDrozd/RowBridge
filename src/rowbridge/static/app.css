@@ -376,3 +376,62 @@ select:focus, input[type="number"]:focus { outline: 2px solid #bfd0e9; outline-o
   .review-panel { grid-template-columns: 1fr; }
   .review-panel section + section { border-left: 0; border-top: 1px solid var(--line); }
 }
+
+/* M5 hardening UI */
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--line);
+  background: #fafbfa;
+}
+.pagination a {
+  min-width: 34px;
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+}
+.pagination a.active {
+  border-color: var(--navy);
+  background: var(--navy);
+  color: #fff;
+}
+.error-page {
+  min-height: calc(100vh - 70px);
+  display: grid;
+  place-items: center;
+  padding: 48px 0;
+}
+.error-panel {
+  width: min(100%, 640px);
+  padding: 30px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.error-panel h1 {
+  margin-top: 8px;
+  font-size: 38px;
+}
+.error-panel > p:not(.eyebrow) {
+  margin-top: 10px;
+  color: var(--muted);
+  line-height: 1.55;
+}
+.error-actions {
+  margin-top: 24px;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}

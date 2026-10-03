@@ -72,13 +72,16 @@ class Repository:
         self.database_path = database_path
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.database_path)
+        connection = sqlite3.connect(self.database_path, timeout=5.0)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("PRAGMA busy_timeout = 5000")
+        connection.execute("PRAGMA synchronous = NORMAL")
         return connection
 
     def initialize(self) -> None:
         with self._connect() as connection:
+            connection.execute("PRAGMA journal_mode = WAL")
             connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS runs (
@@ -263,35 +266,8 @@ class Repository:
             unmatched=counts.get(MatchStatus.UNMATCHED.value, 0),
         )
 
-    def list_matches(self, run_id: str) -> tuple[StoredMatch, ...]:
-        query = """
-            SELECT
-                m.id,
-                m.status,
-                m.score,
-                m.evidence_json,
-                a.row_number AS a_row_number,
-                a.payload_json AS a_payload_json,
-                b.row_number AS b_row_number,
-                b.payload_json AS b_payload_json
-            FROM matches m
-            LEFT JOIN source_rows a ON a.id = m.a_row_id
-            LEFT JOIN source_rows b ON b.id = m.b_row_id
-            WHERE m.run_id = ?
-            ORDER BY
-                CASE m.status
-                    WHEN 'review' THEN 0
-                    WHEN 'confirmed' THEN 1
-                    WHEN 'manual_matched' THEN 2
-                    WHEN 'auto_matched' THEN 3
-                    ELSE 4
-                END,
-                COALESCE(a.row_number, 1000000000),
-                COALESCE(b.row_number, 1000000000)
-        """
-        with self._connect() as connection:
-            rows = connection.execute(query, (run_id,)).fetchall()
-
+    @staticmethod
+    def _matches_from_rows(rows: list[sqlite3.Row]) -> tuple[StoredMatch, ...]:
         result: list[StoredMatch] = []
         for row in rows:
             evidence_raw = json.loads(str(row["evidence_json"]))
@@ -323,6 +299,159 @@ class Repository:
                 )
             )
         return tuple(result)
+
+    @staticmethod
+    def _status_clause(statuses: tuple[MatchStatus, ...] | None) -> tuple[str, list[str]]:
+        if not statuses:
+            return "", []
+        placeholders = ", ".join("?" for _ in statuses)
+        return f" AND m.status IN ({placeholders})", [status.value for status in statuses]
+
+    def count_matches(
+        self,
+        run_id: str,
+        statuses: tuple[MatchStatus, ...] | None = None,
+    ) -> int:
+        status_clause, status_values = self._status_clause(statuses)
+        with self._connect() as connection:
+            row = connection.execute(
+                f"SELECT COUNT(*) AS count FROM matches m WHERE m.run_id = ?{status_clause}",
+                [run_id, *status_values],
+            ).fetchone()
+        return 0 if row is None else int(row["count"])
+
+    def list_matches(
+        self,
+        run_id: str,
+        statuses: tuple[MatchStatus, ...] | None = None,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> tuple[StoredMatch, ...]:
+        if offset < 0:
+            raise ValueError("offset cannot be negative")
+        if limit is not None and limit <= 0:
+            raise ValueError("limit must be positive")
+
+        status_clause, status_values = self._status_clause(statuses)
+        query = f"""
+            SELECT
+                m.id,
+                m.status,
+                m.score,
+                m.evidence_json,
+                a.row_number AS a_row_number,
+                a.payload_json AS a_payload_json,
+                b.row_number AS b_row_number,
+                b.payload_json AS b_payload_json
+            FROM matches m
+            LEFT JOIN source_rows a ON a.id = m.a_row_id
+            LEFT JOIN source_rows b ON b.id = m.b_row_id
+            WHERE m.run_id = ?{status_clause}
+            ORDER BY
+                CASE m.status
+                    WHEN 'review' THEN 0
+                    WHEN 'confirmed' THEN 1
+                    WHEN 'manual_matched' THEN 2
+                    WHEN 'auto_matched' THEN 3
+                    ELSE 4
+                END,
+                COALESCE(a.row_number, 1000000000),
+                COALESCE(b.row_number, 1000000000)
+        """
+        params: list[str | int] = [run_id, *status_values]
+        if limit is not None:
+            query += " LIMIT ? OFFSET ?"
+            params.extend((limit, offset))
+
+        with self._connect() as connection:
+            rows = connection.execute(query, params).fetchall()
+        return self._matches_from_rows(rows)
+
+    def count_unmatched_side(self, run_id: str, side: str) -> int:
+        if side not in {"a", "b"}:
+            raise ValueError("side must be 'a' or 'b'")
+        present = "a_row_id" if side == "a" else "b_row_id"
+        absent = "b_row_id" if side == "a" else "a_row_id"
+        with self._connect() as connection:
+            row = connection.execute(
+                f"""
+                SELECT COUNT(*) AS count
+                FROM matches
+                WHERE run_id = ? AND status = ?
+                  AND {present} IS NOT NULL AND {absent} IS NULL
+                """,
+                (run_id, MatchStatus.UNMATCHED.value),
+            ).fetchone()
+        return 0 if row is None else int(row["count"])
+
+    def list_unmatched_side(
+        self,
+        run_id: str,
+        side: str,
+        *,
+        limit: int,
+    ) -> tuple[StoredMatch, ...]:
+        if side not in {"a", "b"}:
+            raise ValueError("side must be 'a' or 'b'")
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        present = "m.a_row_id" if side == "a" else "m.b_row_id"
+        absent = "m.b_row_id" if side == "a" else "m.a_row_id"
+        query = f"""
+            SELECT
+                m.id, m.status, m.score, m.evidence_json,
+                a.row_number AS a_row_number, a.payload_json AS a_payload_json,
+                b.row_number AS b_row_number, b.payload_json AS b_payload_json
+            FROM matches m
+            LEFT JOIN source_rows a ON a.id = m.a_row_id
+            LEFT JOIN source_rows b ON b.id = m.b_row_id
+            WHERE m.run_id = ? AND m.status = ?
+              AND {present} IS NOT NULL AND {absent} IS NULL
+            ORDER BY COALESCE(a.row_number, b.row_number)
+            LIMIT ?
+        """
+        with self._connect() as connection:
+            rows = connection.execute(
+                query,
+                (run_id, MatchStatus.UNMATCHED.value, limit),
+            ).fetchall()
+        return self._matches_from_rows(rows)
+
+    def get_unmatched_match_by_row(
+        self,
+        run_id: str,
+        side: str,
+        row_number: int,
+    ) -> StoredMatch | None:
+        if side not in {"a", "b"}:
+            raise ValueError("side must be 'a' or 'b'")
+        if row_number < 2:
+            return None
+        row_alias = "a" if side == "a" else "b"
+        present = "m.a_row_id" if side == "a" else "m.b_row_id"
+        absent = "m.b_row_id" if side == "a" else "m.a_row_id"
+        query = f"""
+            SELECT
+                m.id, m.status, m.score, m.evidence_json,
+                a.row_number AS a_row_number, a.payload_json AS a_payload_json,
+                b.row_number AS b_row_number, b.payload_json AS b_payload_json
+            FROM matches m
+            LEFT JOIN source_rows a ON a.id = m.a_row_id
+            LEFT JOIN source_rows b ON b.id = m.b_row_id
+            WHERE m.run_id = ? AND m.status = ?
+              AND {present} IS NOT NULL AND {absent} IS NULL
+              AND {row_alias}.row_number = ?
+            LIMIT 1
+        """
+        with self._connect() as connection:
+            row = connection.execute(
+                query,
+                (run_id, MatchStatus.UNMATCHED.value, row_number),
+            ).fetchone()
+        if row is None:
+            return None
+        return self._matches_from_rows([row])[0]
 
     def accept_review(self, run_id: str, match_id: int) -> None:
         with self._connect() as connection:
@@ -434,7 +563,14 @@ class Repository:
             )
             self._refresh_run_counts(connection, run_id)
 
-    def list_review_events(self, run_id: str) -> tuple[StoredReviewEvent, ...]:
+    def list_review_events(
+        self,
+        run_id: str,
+        *,
+        limit: int | None = None,
+    ) -> tuple[StoredReviewEvent, ...]:
+        if limit is not None and limit <= 0:
+            raise ValueError("limit must be positive")
         query = """
             SELECT
                 e.id,
@@ -454,8 +590,12 @@ class Repository:
             WHERE e.run_id = ?
             ORDER BY e.id DESC
         """
+        params: list[str | int] = [run_id]
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
         with self._connect() as connection:
-            rows = connection.execute(query, (run_id,)).fetchall()
+            rows = connection.execute(query, params).fetchall()
 
         events: list[StoredReviewEvent] = []
         for row in rows:
