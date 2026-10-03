@@ -9,7 +9,15 @@ type RowPayload = dict[str, str]
 class MatchStatus(StrEnum):
     AUTO_MATCHED = "auto_matched"
     REVIEW = "review"
+    CONFIRMED = "confirmed"
+    MANUAL_MATCHED = "manual_matched"
     UNMATCHED = "unmatched"
+
+
+class ReviewAction(StrEnum):
+    ACCEPT = "accept"
+    REJECT = "reject"
+    MANUAL_LINK = "manual_link"
 
 
 class RuleKind(StrEnum):

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from rowbridge.models import (
@@ -11,6 +12,7 @@ from rowbridge.models import (
     MatchDecision,
     MatchSettings,
     MatchStatus,
+    ReviewAction,
     RowPayload,
 )
 
@@ -31,6 +33,14 @@ class StoredRun:
 
 
 @dataclass(frozen=True, slots=True)
+class RunSummary:
+    auto_matched: int
+    human_matched: int
+    review: int
+    unmatched: int
+
+
+@dataclass(frozen=True, slots=True)
 class StoredMatch:
     id: int
     status: MatchStatus
@@ -40,6 +50,21 @@ class StoredMatch:
     a_payload: RowPayload | None
     b_payload: RowPayload | None
     evidence: tuple[Evidence, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class StoredReviewEvent:
+    id: int
+    created_at: str
+    action: ReviewAction
+    previous_status: str | None
+    resulting_status: str
+    score: float | None
+    detail: str
+    a_row_number: int | None
+    b_row_number: int | None
+    a_payload: RowPayload | None
+    b_payload: RowPayload | None
 
 
 class Repository:
@@ -90,8 +115,27 @@ class Repository:
                     CHECK(a_row_id IS NOT NULL OR b_row_id IS NOT NULL)
                 );
 
+                CREATE TABLE IF NOT EXISTS review_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+                    created_at TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    source_match_id INTEGER,
+                    a_row_id INTEGER REFERENCES source_rows(id),
+                    b_row_id INTEGER REFERENCES source_rows(id),
+                    previous_status TEXT,
+                    resulting_status TEXT NOT NULL,
+                    score REAL,
+                    detail TEXT NOT NULL
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_source_rows_run ON source_rows(run_id, side);
                 CREATE INDEX IF NOT EXISTS idx_matches_run ON matches(run_id, status);
+                CREATE INDEX IF NOT EXISTS idx_review_events_run ON review_events(run_id, id);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_matches_unique_a
+                    ON matches(run_id, a_row_id) WHERE a_row_id IS NOT NULL;
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_matches_unique_b
+                    ON matches(run_id, b_row_id) WHERE b_row_id IS NOT NULL;
                 """
             )
 
@@ -197,6 +241,28 @@ class Repository:
             unmatched_count=int(row["unmatched_count"]),
         )
 
+    def get_summary(self, run_id: str) -> RunSummary:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT status, COUNT(*) AS count
+                FROM matches
+                WHERE run_id = ?
+                GROUP BY status
+                """,
+                (run_id,),
+            ).fetchall()
+        counts = {str(row["status"]): int(row["count"]) for row in rows}
+        return RunSummary(
+            auto_matched=counts.get(MatchStatus.AUTO_MATCHED.value, 0),
+            human_matched=(
+                counts.get(MatchStatus.CONFIRMED.value, 0)
+                + counts.get(MatchStatus.MANUAL_MATCHED.value, 0)
+            ),
+            review=counts.get(MatchStatus.REVIEW.value, 0),
+            unmatched=counts.get(MatchStatus.UNMATCHED.value, 0),
+        )
+
     def list_matches(self, run_id: str) -> tuple[StoredMatch, ...]:
         query = """
             SELECT
@@ -213,7 +279,13 @@ class Repository:
             LEFT JOIN source_rows b ON b.id = m.b_row_id
             WHERE m.run_id = ?
             ORDER BY
-                CASE m.status WHEN 'review' THEN 0 WHEN 'auto_matched' THEN 1 ELSE 2 END,
+                CASE m.status
+                    WHEN 'review' THEN 0
+                    WHEN 'confirmed' THEN 1
+                    WHEN 'manual_matched' THEN 2
+                    WHEN 'auto_matched' THEN 3
+                    ELSE 4
+                END,
                 COALESCE(a.row_number, 1000000000),
                 COALESCE(b.row_number, 1000000000)
         """
@@ -251,3 +323,279 @@ class Repository:
                 )
             )
         return tuple(result)
+
+    def accept_review(self, run_id: str, match_id: int) -> None:
+        with self._connect() as connection:
+            row = self._get_match_row(connection, run_id, match_id)
+            self._require_status(row, MatchStatus.REVIEW)
+            connection.execute(
+                "UPDATE matches SET status = ? WHERE id = ?",
+                (MatchStatus.CONFIRMED.value, match_id),
+            )
+            self._record_event(
+                connection=connection,
+                run_id=run_id,
+                action=ReviewAction.ACCEPT,
+                source_match_id=match_id,
+                a_row_id=self._optional_int(row["a_row_id"]),
+                b_row_id=self._optional_int(row["b_row_id"]),
+                previous_status=MatchStatus.REVIEW.value,
+                resulting_status=MatchStatus.CONFIRMED.value,
+                score=float(row["score"]),
+                detail="Accepted proposed match.",
+            )
+            self._refresh_run_counts(connection, run_id)
+
+    def reject_review(self, run_id: str, match_id: int) -> None:
+        with self._connect() as connection:
+            row = self._get_match_row(connection, run_id, match_id)
+            self._require_status(row, MatchStatus.REVIEW)
+            a_row_id = self._optional_int(row["a_row_id"])
+            b_row_id = self._optional_int(row["b_row_id"])
+            if a_row_id is None or b_row_id is None:
+                raise ValueError("A review pair must contain one row from each side")
+
+            connection.execute("DELETE FROM matches WHERE id = ?", (match_id,))
+            self._insert_unmatched(connection, run_id, a_row_id, side="a")
+            self._insert_unmatched(connection, run_id, b_row_id, side="b")
+            self._record_event(
+                connection=connection,
+                run_id=run_id,
+                action=ReviewAction.REJECT,
+                source_match_id=match_id,
+                a_row_id=a_row_id,
+                b_row_id=b_row_id,
+                previous_status=MatchStatus.REVIEW.value,
+                resulting_status=MatchStatus.UNMATCHED.value,
+                score=float(row["score"]),
+                detail="Rejected proposed match; both rows returned to unmatched.",
+            )
+            self._refresh_run_counts(connection, run_id)
+
+    def create_manual_link(self, run_id: str, a_match_id: int, b_match_id: int) -> None:
+        if a_match_id == b_match_id:
+            raise ValueError("Select one unmatched row from each side")
+
+        with self._connect() as connection:
+            a_match = self._get_match_row(connection, run_id, a_match_id)
+            b_match = self._get_match_row(connection, run_id, b_match_id)
+            self._require_status(a_match, MatchStatus.UNMATCHED)
+            self._require_status(b_match, MatchStatus.UNMATCHED)
+
+            a_row_id = self._optional_int(a_match["a_row_id"])
+            b_row_id = self._optional_int(b_match["b_row_id"])
+            if a_row_id is None or a_match["b_row_id"] is not None:
+                raise ValueError("The Side A selection is not an unmatched Side A row")
+            if b_row_id is None or b_match["a_row_id"] is not None:
+                raise ValueError("The Side B selection is not an unmatched Side B row")
+
+            connection.execute(
+                "DELETE FROM matches WHERE id IN (?, ?)",
+                (a_match_id, b_match_id),
+            )
+            evidence = json.dumps(
+                [
+                    asdict(
+                        Evidence(
+                            field="review",
+                            detail="Linked manually; algorithmic score was not used.",
+                            score=0.0,
+                        )
+                    )
+                ]
+            )
+            cursor = connection.execute(
+                """
+                INSERT INTO matches (run_id, a_row_id, b_row_id, score, status, evidence_json)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    a_row_id,
+                    b_row_id,
+                    0.0,
+                    MatchStatus.MANUAL_MATCHED.value,
+                    evidence,
+                ),
+            )
+            if cursor.lastrowid is None:
+                raise RuntimeError("SQLite did not return a match id")
+            self._record_event(
+                connection=connection,
+                run_id=run_id,
+                action=ReviewAction.MANUAL_LINK,
+                source_match_id=cursor.lastrowid,
+                a_row_id=a_row_id,
+                b_row_id=b_row_id,
+                previous_status=MatchStatus.UNMATCHED.value,
+                resulting_status=MatchStatus.MANUAL_MATCHED.value,
+                score=None,
+                detail="Linked two previously unmatched rows manually.",
+            )
+            self._refresh_run_counts(connection, run_id)
+
+    def list_review_events(self, run_id: str) -> tuple[StoredReviewEvent, ...]:
+        query = """
+            SELECT
+                e.id,
+                e.created_at,
+                e.action,
+                e.previous_status,
+                e.resulting_status,
+                e.score,
+                e.detail,
+                a.row_number AS a_row_number,
+                a.payload_json AS a_payload_json,
+                b.row_number AS b_row_number,
+                b.payload_json AS b_payload_json
+            FROM review_events e
+            LEFT JOIN source_rows a ON a.id = e.a_row_id
+            LEFT JOIN source_rows b ON b.id = e.b_row_id
+            WHERE e.run_id = ?
+            ORDER BY e.id DESC
+        """
+        with self._connect() as connection:
+            rows = connection.execute(query, (run_id,)).fetchall()
+
+        events: list[StoredReviewEvent] = []
+        for row in rows:
+            events.append(
+                StoredReviewEvent(
+                    id=int(row["id"]),
+                    created_at=str(row["created_at"]),
+                    action=ReviewAction(str(row["action"])),
+                    previous_status=(
+                        str(row["previous_status"])
+                        if row["previous_status"] is not None
+                        else None
+                    ),
+                    resulting_status=str(row["resulting_status"]),
+                    score=float(row["score"]) if row["score"] is not None else None,
+                    detail=str(row["detail"]),
+                    a_row_number=(
+                        int(row["a_row_number"]) if row["a_row_number"] is not None else None
+                    ),
+                    b_row_number=(
+                        int(row["b_row_number"]) if row["b_row_number"] is not None else None
+                    ),
+                    a_payload=(
+                        json.loads(str(row["a_payload_json"]))
+                        if row["a_payload_json"] is not None
+                        else None
+                    ),
+                    b_payload=(
+                        json.loads(str(row["b_payload_json"]))
+                        if row["b_payload_json"] is not None
+                        else None
+                    ),
+                )
+            )
+        return tuple(events)
+
+    @staticmethod
+    def _get_match_row(
+        connection: sqlite3.Connection,
+        run_id: str,
+        match_id: int,
+    ) -> sqlite3.Row:
+        row: sqlite3.Row | None = connection.execute(
+            "SELECT * FROM matches WHERE id = ? AND run_id = ?",
+            (match_id, run_id),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Match not found for this run")
+        return row
+
+    @staticmethod
+    def _require_status(row: sqlite3.Row, expected: MatchStatus) -> None:
+        if str(row["status"]) != expected.value:
+            raise ValueError(f"Match is not in {expected.value} state")
+
+    @staticmethod
+    def _optional_int(value: object) -> int | None:
+        if value is None:
+            return None
+        if not isinstance(value, (int, float, str, bytes, bytearray)):
+            value_type = type(value).__name__
+            raise TypeError(f"Expected an SQLite integer-compatible value, got {value_type}")
+        return int(value)
+
+    @staticmethod
+    def _insert_unmatched(
+        connection: sqlite3.Connection,
+        run_id: str,
+        row_id: int,
+        side: str,
+    ) -> None:
+        values: tuple[str, int | None, int | None, float, str, str]
+        if side == "a":
+            values = (run_id, row_id, None, 0.0, MatchStatus.UNMATCHED.value, "[]")
+        else:
+            values = (run_id, None, row_id, 0.0, MatchStatus.UNMATCHED.value, "[]")
+        connection.execute(
+            """
+            INSERT INTO matches (run_id, a_row_id, b_row_id, score, status, evidence_json)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            values,
+        )
+
+    @staticmethod
+    def _refresh_run_counts(connection: sqlite3.Connection, run_id: str) -> None:
+        rows = connection.execute(
+            """
+            SELECT status, COUNT(*) AS count
+            FROM matches
+            WHERE run_id = ?
+            GROUP BY status
+            """,
+            (run_id,),
+        ).fetchall()
+        counts = {str(row["status"]): int(row["count"]) for row in rows}
+        connection.execute(
+            """
+            UPDATE runs
+            SET auto_count = ?, review_count = ?, unmatched_count = ?
+            WHERE id = ?
+            """,
+            (
+                counts.get(MatchStatus.AUTO_MATCHED.value, 0),
+                counts.get(MatchStatus.REVIEW.value, 0),
+                counts.get(MatchStatus.UNMATCHED.value, 0),
+                run_id,
+            ),
+        )
+
+    @staticmethod
+    def _record_event(
+        connection: sqlite3.Connection,
+        run_id: str,
+        action: ReviewAction,
+        source_match_id: int,
+        a_row_id: int | None,
+        b_row_id: int | None,
+        previous_status: str | None,
+        resulting_status: str,
+        score: float | None,
+        detail: str,
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO review_events (
+                run_id, created_at, action, source_match_id, a_row_id, b_row_id,
+                previous_status, resulting_status, score, detail
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run_id,
+                datetime.now(UTC).isoformat(timespec="seconds"),
+                action.value,
+                source_match_id,
+                a_row_id,
+                b_row_id,
+                previous_status,
+                resulting_status,
+                score,
+                detail,
+            ),
+        )

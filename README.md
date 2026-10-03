@@ -2,7 +2,7 @@
 
 RowBridge is a local-first workbench for reconciling two CSV exports when the same real record is represented differently on each side.
 
-It is aimed at operational data work where a clean shared ID is missing or inconsistent. Instead of returning an opaque match flag, RowBridge records the evidence behind each proposed pair and separates confident matches from rows that need review.
+It is aimed at operational data work where a clean shared ID is missing or inconsistent. Instead of returning an opaque match flag, RowBridge records the evidence behind each proposed pair, separates confident matches from rows that need review, and keeps human decisions in an audit trail.
 
 ## Current capabilities
 
@@ -16,9 +16,13 @@ It is aimed at operational data work where a clean shared ID is missing or incon
 - use a fuzzy fallback only for rows that have no useful block candidate;
 - preserve one-to-one matching across both sides;
 - detect close competitors on either side and keep ambiguous pairs in review;
-- persist runs and source rows in SQLite;
+- accept or reject proposed review matches;
+- manually link one unmatched Side A row to one unmatched Side B row;
+- store human review actions separately from algorithmic matching evidence;
+- filter results by review, matched, or unmatched state;
+- persist runs, source rows, current match state, and review history in SQLite;
 - reopen a saved run after an application restart;
-- export a reconciliation CSV with the evidence summary.
+- export the current reconciliation state to CSV.
 
 The application does not modify either source file and does not make network calls for matching.
 
@@ -54,7 +58,15 @@ Support fields do not automatically rescue a clearly unrelated primary value. A 
 
 One-to-one selection is global and deterministic. A selected pair is sent to review when its score is below the auto threshold or another candidate for either source row is within the ambiguity margin.
 
-This is not an accounting engine, master-data-management system, or automatic data-correction tool. Human review actions are the next product milestone.
+## Human review behavior
+
+A proposed review pair can be accepted or rejected. Accepting it keeps the original score and evidence but changes the current state to `confirmed`. Rejecting it removes the proposed pair and returns both source rows to the unmatched pool.
+
+Two unmatched rows can be linked manually. Manual links are marked separately from algorithmic matches and do not pretend to have an algorithmic confidence score.
+
+Every accept, reject, and manual-link action is appended to a review history with the affected rows, timestamp, previous state, resulting state, and a short explanation. The current match table can change as a reviewer works, but the human decision history remains available for audit.
+
+This is not an accounting engine, master-data-management system, or automatic data-correction tool.
 
 ## Development
 
@@ -64,7 +76,7 @@ uv run mypy src tests
 uv run pytest
 ```
 
-The test suite covers typed comparison rules, candidate pruning, fuzzy fallback, support-field rescue rules, one-to-one competition, and the full web flow from upload through SQLite persistence and CSV export.
+The test suite covers typed comparison rules, candidate pruning, fuzzy fallback, support-field rescue rules, one-to-one competition, review acceptance and rejection, manual links, persisted audit history, result filters, and the full web flow from upload through SQLite persistence and CSV export.
 
 ## Project structure
 
@@ -75,7 +87,7 @@ src/rowbridge/
   matching.py        typed rule scoring and one-to-one decisions
   matching_utils.py  normalization and value parsing
   service.py         reconciliation use case
-  storage.py         SQLite persistence
+  storage.py         SQLite persistence and review mutations
   web.py             FastAPI routes
   templates/         server-rendered UI
   static/            local CSS
@@ -83,7 +95,7 @@ src/rowbridge/
 
 ## Privacy
 
-Files are processed on the machine running RowBridge. The matching path has no external API dependency. Source files are read-only inputs; RowBridge writes its own staged copies, SQLite state, and explicit exports under its application data directory.
+Files are processed on the machine running RowBridge. The matching path has no external API dependency. Source files are read-only inputs; RowBridge writes its own staged copies, SQLite state, review history, and explicit exports under its application data directory.
 
 ## License
 

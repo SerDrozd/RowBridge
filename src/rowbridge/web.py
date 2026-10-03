@@ -14,11 +14,16 @@ from fastapi.templating import Jinja2Templates
 
 from rowbridge.config import Settings
 from rowbridge.ingestion import CsvInputError, parse_csv_bytes, read_staged_csv, write_staged_csv
-from rowbridge.models import CsvTable, FieldMapping, MatchSettings
+from rowbridge.models import CsvTable, FieldMapping, MatchSettings, MatchStatus, RowPayload
 from rowbridge.service import create_reconciliation_run
 from rowbridge.storage import Repository, StoredMatch
 
 PACKAGE_DIR = Path(__file__).resolve().parent
+MATCHED_STATUSES = {
+    MatchStatus.AUTO_MATCHED,
+    MatchStatus.CONFIRMED,
+    MatchStatus.MANUAL_MATCHED,
+}
 
 
 def _optional_column(value: str) -> str | None:
@@ -26,11 +31,27 @@ def _optional_column(value: str) -> str | None:
     return stripped or None
 
 
-def _display_value(match: StoredMatch, side: str, column: str) -> str:
-    payload = match.a_payload if side == "a" else match.b_payload
+def _payload_value(payload: RowPayload | None, column: str) -> str:
     if payload is None:
         return ""
     return payload.get(column, "")
+
+
+def _display_value(match: StoredMatch, side: str, column: str) -> str:
+    payload = match.a_payload if side == "a" else match.b_payload
+    return _payload_value(payload, column)
+
+
+def _filter_matches(matches: tuple[StoredMatch, ...], view: str) -> tuple[StoredMatch, ...]:
+    if view == "all":
+        return matches
+    if view == "review":
+        return tuple(match for match in matches if match.status == MatchStatus.REVIEW)
+    if view == "matched":
+        return tuple(match for match in matches if match.status in MATCHED_STATUSES)
+    if view == "unmatched":
+        return tuple(match for match in matches if match.status == MatchStatus.UNMATCHED)
+    raise ValueError("Unknown result view")
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -40,7 +61,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     repository.initialize()
     templates = Jinja2Templates(directory=PACKAGE_DIR / "templates")
 
-    app = FastAPI(title="RowBridge", version="0.2.0")
+    app = FastAPI(title="RowBridge", version="0.3.0")
     app.mount("/static", StaticFiles(directory=PACKAGE_DIR / "static"), name="static")
 
     @app.get("/", response_class=HTMLResponse)
@@ -147,16 +168,75 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return RedirectResponse(url=f"/runs/{run_id}", status_code=303)
 
     @app.get("/runs/{run_id}", response_class=HTMLResponse)
-    def results(request: Request, run_id: str) -> HTMLResponse:
+    def results(request: Request, run_id: str, view: str = "all") -> HTMLResponse:
         run = repository.get_run(run_id)
         if run is None:
             raise HTTPException(status_code=404, detail="Run not found")
-        matches = repository.list_matches(run_id)
+        all_matches = repository.list_matches(run_id)
+        try:
+            visible_matches = _filter_matches(all_matches, view)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        unmatched_a = tuple(
+            match
+            for match in all_matches
+            if match.status == MatchStatus.UNMATCHED and match.a_payload is not None
+        )
+        unmatched_b = tuple(
+            match
+            for match in all_matches
+            if match.status == MatchStatus.UNMATCHED and match.b_payload is not None
+        )
         return templates.TemplateResponse(
             request=request,
             name="results.html",
-            context={"run": run, "matches": matches, "display_value": _display_value},
+            context={
+                "run": run,
+                "summary": repository.get_summary(run_id),
+                "matches": visible_matches,
+                "events": repository.list_review_events(run_id),
+                "unmatched_a": unmatched_a,
+                "unmatched_b": unmatched_b,
+                "active_view": view,
+                "display_value": _display_value,
+                "payload_value": _payload_value,
+            },
         )
+
+    @app.post("/runs/{run_id}/matches/{match_id}/accept")
+    def accept_match(run_id: str, match_id: int) -> RedirectResponse:
+        if repository.get_run(run_id) is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        try:
+            repository.accept_review(run_id, match_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return RedirectResponse(url=f"/runs/{run_id}#review-history", status_code=303)
+
+    @app.post("/runs/{run_id}/matches/{match_id}/reject")
+    def reject_match(run_id: str, match_id: int) -> RedirectResponse:
+        if repository.get_run(run_id) is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        try:
+            repository.reject_review(run_id, match_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return RedirectResponse(url=f"/runs/{run_id}#manual-link", status_code=303)
+
+    @app.post("/runs/{run_id}/manual-links")
+    def manual_link(
+        run_id: str,
+        a_match_id: Annotated[int, Form()],
+        b_match_id: Annotated[int, Form()],
+    ) -> RedirectResponse:
+        if repository.get_run(run_id) is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        try:
+            repository.create_manual_link(run_id, a_match_id, b_match_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return RedirectResponse(url=f"/runs/{run_id}#review-history", status_code=303)
 
     @app.get("/runs/{run_id}/export.csv")
     def export_csv(run_id: str) -> StreamingResponse:
@@ -180,10 +260,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         for match in matches:
             evidence = " | ".join(item.detail for item in match.evidence)
+            score = "" if match.status == MatchStatus.MANUAL_MATCHED else f"{match.score:.4f}"
             writer.writerow(
                 [
                     match.status.value,
-                    f"{match.score:.4f}",
+                    score,
                     match.a_row_number or "",
                     match.b_row_number or "",
                     _display_value(match, "a", run.mapping.primary_a),

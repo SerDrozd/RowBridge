@@ -25,9 +25,7 @@ def make_client(tmp_path: Path) -> TestClient:
     return TestClient(app)
 
 
-def test_vertical_slice_upload_map_persist_render_and_export(tmp_path: Path) -> None:
-    client = make_client(tmp_path)
-
+def create_sample_run(client: TestClient) -> str:
     prepared = client.post(
         "/prepare",
         files={
@@ -58,7 +56,18 @@ def test_vertical_slice_upload_map_persist_render_and_export(tmp_path: Path) -> 
         follow_redirects=False,
     )
     assert created.status_code == 303
-    location = created.headers["location"]
+    return created.headers["location"]
+
+
+def review_match_id(html: str) -> int:
+    match = re.search(r'/matches/(\d+)/accept', html)
+    assert match is not None
+    return int(match.group(1))
+
+
+def test_vertical_slice_upload_map_persist_render_and_export(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    location = create_sample_run(client)
 
     results = client.get(location)
     assert results.status_code == 200
@@ -66,6 +75,8 @@ def test_vertical_slice_upload_map_persist_render_and_export(tmp_path: Path) -> 
     assert "INV-1" in results.text
     assert "INV1" in results.text
     assert "Blue Finch GmbH" in results.text
+    assert "Accept match" in results.text
+    assert "Link unmatched rows manually" in results.text
 
     fresh_client = make_client(tmp_path)
     persisted = fresh_client.get(location)
@@ -76,6 +87,90 @@ def test_vertical_slice_upload_map_persist_render_and_export(tmp_path: Path) -> 
     assert export.status_code == 200
     assert "status,score,side_a_row" in export.text
     assert "INV-1,INV1" in export.text
+
+
+def test_accept_review_persists_confirmation_and_audit_event(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    location = create_sample_run(client)
+    results = client.get(location)
+    match_id = review_match_id(results.text)
+
+    accepted = client.post(
+        f"{location}/matches/{match_id}/accept",
+        follow_redirects=False,
+    )
+    assert accepted.status_code == 303
+
+    fresh_client = make_client(tmp_path)
+    persisted = fresh_client.get(location)
+    assert persisted.status_code == 200
+    assert "confirmed" in persisted.text
+    assert "Accepted proposed match." in persisted.text
+    assert "accept" in persisted.text
+    assert "Needs review</span><strong>0" in persisted.text
+    assert "Human matched</span><strong>1" in persisted.text
+
+    repeated = fresh_client.post(
+        f"{location}/matches/{match_id}/accept",
+        follow_redirects=False,
+    )
+    assert repeated.status_code == 409
+
+
+def test_reject_review_then_manually_link_unmatched_rows(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    location = create_sample_run(client)
+    results = client.get(location)
+    match_id = review_match_id(results.text)
+
+    rejected = client.post(
+        f"{location}/matches/{match_id}/reject",
+        follow_redirects=False,
+    )
+    assert rejected.status_code == 303
+
+    after_reject = client.get(location)
+    assert "Rejected proposed match" in after_reject.text
+    assert "Needs review</span><strong>0" in after_reject.text
+    assert "Unmatched rows</span><strong>2" in after_reject.text
+
+    a_option = re.search(r'<option value="(\d+)">row 3 · INV-2</option>', after_reject.text)
+    b_option = re.search(r'<option value="(\d+)">row 3 · INV-9</option>', after_reject.text)
+    assert a_option is not None
+    assert b_option is not None
+
+    linked = client.post(
+        f"{location}/manual-links",
+        data={
+            "a_match_id": a_option.group(1),
+            "b_match_id": b_option.group(1),
+        },
+        follow_redirects=False,
+    )
+    assert linked.status_code == 303
+
+    fresh_client = make_client(tmp_path)
+    persisted = fresh_client.get(location)
+    assert "manual matched" in persisted.text
+    assert "Linked two previously unmatched rows manually." in persisted.text
+    assert "Human matched</span><strong>1" in persisted.text
+    assert "Unmatched rows</span><strong>0" in persisted.text
+
+    export = fresh_client.get(f"{location}/export.csv")
+    assert "manual_matched,,3,3,INV-2,INV-9" in export.text
+
+
+def test_result_filters_reject_unknown_view(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    location = create_sample_run(client)
+
+    review = client.get(f"{location}?view=review")
+    assert review.status_code == 200
+    assert "INV-2" in review.text
+    assert "INV-1" not in review.text
+
+    invalid = client.get(f"{location}?view=wat")
+    assert invalid.status_code == 400
 
 
 def test_prepare_rejects_non_csv_files(tmp_path: Path) -> None:
