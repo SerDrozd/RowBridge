@@ -14,6 +14,54 @@ def test_normalize_text_removes_case_spacing_and_punctuation() -> None:
     assert normalize_text("ACME, Ltd.") == "acmeltd"
 
 
+def test_normalize_text_preserves_unicode_letters() -> None:
+    assert normalize_text(
+        "\u0422\u041e\u0412 \u00ab\u041a\u0438\u0457\u0432-2026\u00bb"
+    ) == "\u0442\u043e\u0432\u043a\u0438\u0457\u04322026"
+    assert normalize_text(
+        "Caf\u00e9, S\u00e3o Paulo!"
+    ) == "caf\u00e9s\u00e3opaulo"
+    assert normalize_text("Cafe\u0301") == "caf\u00e9"
+
+
+def test_reconcile_matches_cyrillic_primary_values() -> None:
+    table_a = CsvTable(
+        filename="a.csv",
+        headers=("name",),
+        rows=(
+            {
+                "name": (
+                    "\u0422\u041e\u0412 "
+                    "\u00ab\u0420\u043e\u043c\u0430\u0448\u043a\u0430\u00bb"
+                )
+            },
+        ),
+    )
+    table_b = CsvTable(
+        filename="b.csv",
+        headers=("name",),
+        rows=(
+            {
+                "name": (
+                    "\u0442\u043e\u0432 "
+                    "\u0440\u043e\u043c\u0430\u0448\u043a\u0430"
+                )
+            },
+        ),
+    )
+
+    decisions = reconcile(
+        table_a,
+        table_b,
+        FieldMapping(primary_a="name", primary_b="name"),
+        MatchSettings(),
+    )
+
+    assert len(decisions) == 1
+    assert decisions[0].status == MatchStatus.AUTO_MATCHED
+    assert decisions[0].score == 1.0
+
+
 def test_build_rules_uses_typed_comparators_and_expected_weights() -> None:
     mapping = FieldMapping(
         primary_a="ref",

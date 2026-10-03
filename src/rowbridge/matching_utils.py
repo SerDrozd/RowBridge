@@ -5,13 +5,12 @@ import unicodedata
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
-_NON_ALNUM = re.compile(r"[^a-z0-9]+")
 _DATE_FORMATS = ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d.%m.%Y")
 
 
 def normalize_text(value: str) -> str:
-    decomposed = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii")
-    return _NON_ALNUM.sub("", decomposed.casefold())
+    normalized = unicodedata.normalize("NFKC", value).casefold()
+    return "".join(character for character in normalized if character.isalnum())
 
 
 def parse_amount(value: str) -> Decimal | None:
