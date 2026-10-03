@@ -35,7 +35,7 @@ Issues = "https://github.com/SerDrozd/rowbridge/issues"
 [project.optional-dependencies]
 dev = [
   "httpx2>=2.13,<3",
-  "mypy>=1.18,<2",
+  "mypy>=1.18,<3",
   "pytest>=8.4,<9",
   "ruff>=0.13,<1",
 ]
