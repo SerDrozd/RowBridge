@@ -142,6 +142,44 @@ def test_build_rules_uses_typed_comparators_and_expected_weights() -> None:
     assert sum(rule.weight for rule in rules) == 1.0
 
 
+def test_optional_rules_keep_base_weights_before_normalization() -> None:
+    mapping = FieldMapping(
+        primary_a="ref",
+        primary_b="reference",
+        amount_a="amount",
+        amount_b="total",
+        date_a="date",
+        date_b="paid",
+    )
+
+    rules = build_rules(mapping, MatchSettings())
+
+    assert [(rule.field, rule.weight) for rule in rules] == [
+        ("primary", 0.55),
+        ("amount", 0.15),
+        ("date", 0.10),
+    ]
+
+
+def test_score_pair_normalizes_remaining_rule_weights() -> None:
+    mapping = FieldMapping(
+        primary_a="ref",
+        primary_b="reference",
+        amount_a="amount",
+        amount_b="total",
+    )
+
+    score, evidence = score_pair(
+        {"ref": "INV-001", "amount": "10.00"},
+        {"reference": "INV001", "total": "11.00"},
+        mapping,
+        MatchSettings(),
+    )
+
+    assert score == 0.785714
+    assert [item.score for item in evidence] == [0.785714, 0.0]
+
+
 def test_score_pair_uses_primary_secondary_amount_and_date_evidence() -> None:
     mapping = FieldMapping(
         primary_a="ref",
