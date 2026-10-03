@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from rowbridge.candidates import generate_candidates
 from rowbridge.matching import (
     build_rules,
@@ -5,7 +7,7 @@ from rowbridge.matching import (
     reconcile_with_diagnostics,
     score_pair,
 )
-from rowbridge.matching_utils import normalize_text
+from rowbridge.matching_utils import normalize_text, parse_amount
 from rowbridge.models import CsvTable, FieldMapping, MatchSettings, MatchStatus, RuleKind
 
 
@@ -60,6 +62,42 @@ def test_reconcile_matches_cyrillic_primary_values() -> None:
     assert len(decisions) == 1
     assert decisions[0].status == MatchStatus.AUTO_MATCHED
     assert decisions[0].score == 1.0
+
+
+def test_parse_amount_supports_common_decimal_and_grouping_formats() -> None:
+    assert parse_amount("1234.56") == Decimal("1234.56")
+    assert parse_amount("1234,56") == Decimal("1234.56")
+    assert parse_amount("1,234.56") == Decimal("1234.56")
+    assert parse_amount("1.234,56") == Decimal("1234.56")
+    assert parse_amount("12,345,678.90") == Decimal("12345678.90")
+    assert parse_amount("12.345.678,90") == Decimal("12345678.90")
+
+
+def test_parse_amount_preserves_accounting_parentheses_as_negative() -> None:
+    assert parse_amount("(1,234.56)") == Decimal("-1234.56")
+    assert parse_amount("(1.234,56)") == Decimal("-1234.56")
+    assert parse_amount("($1,234.56)") == Decimal("-1234.56")
+    assert parse_amount("-(1,234.56)") is None
+
+
+def test_score_pair_matches_amounts_with_different_locale_separators() -> None:
+    mapping = FieldMapping(
+        primary_a="ref",
+        primary_b="reference",
+        amount_a="amount",
+        amount_b="total",
+    )
+
+    score, evidence = score_pair(
+        {"ref": "INV-001", "amount": "1.234,56"},
+        {"reference": "INV001", "total": "1,234.56"},
+        mapping,
+        MatchSettings(),
+    )
+
+    assert score == 1.0
+    amount_evidence = next(item for item in evidence if item.field == "amount")
+    assert "difference 0.00" in amount_evidence.detail
 
 
 def test_score_pair_accepts_excel_datetime_text_for_date_rule() -> None:
