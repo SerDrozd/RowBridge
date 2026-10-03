@@ -12,6 +12,8 @@ def validate_mapping(table_a: CsvTable, table_b: CsvTable, mapping: FieldMapping
     selections = (
         ("primary_a", mapping.primary_a, table_a.headers),
         ("primary_b", mapping.primary_b, table_b.headers),
+        ("secondary_a", mapping.secondary_a, table_a.headers),
+        ("secondary_b", mapping.secondary_b, table_b.headers),
         ("amount_a", mapping.amount_a, table_a.headers),
         ("amount_b", mapping.amount_b, table_b.headers),
         ("date_a", mapping.date_a, table_a.headers),
@@ -21,6 +23,8 @@ def validate_mapping(table_a: CsvTable, table_b: CsvTable, mapping: FieldMapping
         if column is not None and column not in headers:
             raise ValueError(f"Unknown column selected for {label}: {column}")
 
+    if bool(mapping.secondary_a) != bool(mapping.secondary_b):
+        raise ValueError("Select secondary text columns on both sides or neither side")
     if bool(mapping.amount_a) != bool(mapping.amount_b):
         raise ValueError("Select amount columns on both sides or neither side")
     if bool(mapping.date_a) != bool(mapping.date_b):

@@ -1,56 +1,171 @@
 from __future__ import annotations
 
-import re
-import unicodedata
-from datetime import date, datetime
-from decimal import Decimal, InvalidOperation
+from dataclasses import dataclass
+from decimal import Decimal
 
 from rapidfuzz.fuzz import WRatio
 
+from rowbridge.candidates import generate_candidates
+from rowbridge.matching_utils import normalize_text, parse_amount, parse_date
 from rowbridge.models import (
+    CandidateGeneration,
     CandidateScore,
+    ComparisonRule,
     CsvTable,
     Evidence,
     FieldMapping,
     MatchDecision,
     MatchSettings,
     MatchStatus,
+    RuleKind,
 )
 
-_NON_ALNUM = re.compile(r"[^a-z0-9]+")
-_DATE_FORMATS = ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d.%m.%Y")
+
+@dataclass(frozen=True, slots=True)
+class _RuleResult:
+    field: str
+    raw_score: float
+    weighted_score: float
+    weight: float
+    detail: str
 
 
-def normalize_text(value: str) -> str:
-    decomposed = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii")
-    return _NON_ALNUM.sub("", decomposed.casefold())
+def build_rules(mapping: FieldMapping, settings: MatchSettings) -> tuple[ComparisonRule, ...]:
+    has_secondary = bool(mapping.secondary_a and mapping.secondary_b)
+    primary_weight = 0.55 if has_secondary else 0.70
+    amount_weight = 0.15 if has_secondary else 0.20
+
+    rules = [
+        ComparisonRule(
+            field="primary",
+            column_a=mapping.primary_a,
+            column_b=mapping.primary_b,
+            kind=RuleKind.FUZZY_TEXT,
+            weight=primary_weight,
+        )
+    ]
+    if mapping.secondary_a and mapping.secondary_b:
+        rules.append(
+            ComparisonRule(
+                field="secondary",
+                column_a=mapping.secondary_a,
+                column_b=mapping.secondary_b,
+                kind=RuleKind.FUZZY_TEXT,
+                weight=0.20,
+            )
+        )
+    if mapping.amount_a and mapping.amount_b:
+        rules.append(
+            ComparisonRule(
+                field="amount",
+                column_a=mapping.amount_a,
+                column_b=mapping.amount_b,
+                kind=RuleKind.NUMERIC_TOLERANCE,
+                weight=amount_weight,
+                tolerance=settings.amount_tolerance,
+            )
+        )
+    if mapping.date_a and mapping.date_b:
+        rules.append(
+            ComparisonRule(
+                field="date",
+                column_a=mapping.date_a,
+                column_b=mapping.date_b,
+                kind=RuleKind.DATE_WINDOW,
+                weight=0.10,
+                window_days=settings.date_window_days,
+            )
+        )
+    return tuple(rules)
 
 
-def parse_amount(value: str) -> Decimal | None:
-    cleaned = value.strip().replace(" ", "")
-    if not cleaned:
-        return None
-    if cleaned.count(",") == 1 and "." not in cleaned:
-        cleaned = cleaned.replace(",", ".")
+def _evaluate_rule(
+    row_a: dict[str, str],
+    row_b: dict[str, str],
+    rule: ComparisonRule,
+) -> _RuleResult:
+    value_a = row_a[rule.column_a]
+    value_b = row_b[rule.column_b]
+
+    if rule.kind == RuleKind.FUZZY_TEXT:
+        normalized_a = normalize_text(value_a)
+        normalized_b = normalize_text(value_b)
+        raw_score = (
+            WRatio(normalized_a, normalized_b) / 100 if normalized_a and normalized_b else 0.0
+        )
+        detail = f'"{value_a}" vs "{value_b}" similarity {raw_score:.0%}'
+    elif rule.kind == RuleKind.NUMERIC_TOLERANCE:
+        amount_a = parse_amount(value_a)
+        amount_b = parse_amount(value_b)
+        tolerance = Decimal(str(rule.tolerance or 0.0))
+        raw_score = 0.0
+        if amount_a is not None and amount_b is not None:
+            difference = abs(amount_a - amount_b)
+            raw_score = 1.0 if difference <= tolerance else 0.0
+            detail = f"difference {difference}; tolerance {tolerance}"
+        else:
+            detail = "could not parse both amounts"
+    elif rule.kind == RuleKind.DATE_WINDOW:
+        date_a = parse_date(value_a)
+        date_b = parse_date(value_b)
+        window_days = rule.window_days or 0
+        raw_score = 0.0
+        if date_a is not None and date_b is not None:
+            day_difference = abs((date_a - date_b).days)
+            raw_score = 1.0 if day_difference <= window_days else 0.0
+            detail = f"difference {day_difference} day(s); window {window_days}"
+        else:
+            detail = "could not parse both dates"
     else:
-        cleaned = cleaned.replace(",", "")
-    cleaned = re.sub(r"[^0-9.\-]", "", cleaned)
-    try:
-        return Decimal(cleaned)
-    except (InvalidOperation, ValueError):
-        return None
+        raise ValueError(f"Unsupported comparison rule: {rule.kind}")
+
+    return _RuleResult(
+        field=rule.field,
+        raw_score=raw_score,
+        weighted_score=raw_score * rule.weight,
+        weight=rule.weight,
+        detail=detail,
+    )
 
 
-def parse_date(value: str) -> date | None:
-    stripped = value.strip()
-    if not stripped:
-        return None
-    for format_string in _DATE_FORMATS:
-        try:
-            return datetime.strptime(stripped, format_string).date()
-        except ValueError:
-            continue
-    return None
+def _evaluate_pair(
+    row_a: dict[str, str],
+    row_b: dict[str, str],
+    rules: tuple[ComparisonRule, ...],
+) -> tuple[float, tuple[Evidence, ...], dict[str, float]]:
+    results = tuple(_evaluate_rule(row_a, row_b, rule) for rule in rules)
+    available_weight = sum(result.weight for result in results)
+    if available_weight <= 0:
+        raise ValueError("At least one comparison rule is required")
+
+    score = sum(result.weighted_score for result in results) / available_weight
+    evidence = tuple(
+        Evidence(
+            field=result.field,
+            detail=result.detail,
+            score=round(result.weighted_score / available_weight, 6),
+        )
+        for result in results
+    )
+    raw_scores = {result.field: result.raw_score for result in results}
+    return round(min(score, 1.0), 6), evidence, raw_scores
+
+
+def _is_viable(raw_scores: dict[str, float], settings: MatchSettings) -> bool:
+    primary = raw_scores.get("primary", 0.0)
+    if primary >= settings.minimum_primary_similarity:
+        return True
+
+    secondary = raw_scores.get("secondary")
+    if secondary is None:
+        return False
+
+    support_match = raw_scores.get("amount") == 1.0 or raw_scores.get("date") == 1.0
+    return (
+        primary >= settings.rescue_primary_similarity
+        and secondary >= settings.rescue_secondary_similarity
+        and support_match
+    )
 
 
 def score_pair(
@@ -59,97 +174,94 @@ def score_pair(
     mapping: FieldMapping,
     settings: MatchSettings,
 ) -> tuple[float, tuple[Evidence, ...]]:
-    components: list[tuple[str, str, float, float]] = []
-
-    primary_a = row_a[mapping.primary_a]
-    primary_b = row_b[mapping.primary_b]
-    normalized_a = normalize_text(primary_a)
-    normalized_b = normalize_text(primary_b)
-    similarity = WRatio(normalized_a, normalized_b) / 100 if normalized_a and normalized_b else 0.0
-    components.append(
-        (
-            "primary",
-            f'"{primary_a}" vs "{primary_b}" similarity {similarity:.0%}',
-            similarity * 0.70,
-            0.70,
-        )
-    )
-
-    if mapping.amount_a and mapping.amount_b:
-        amount_a = parse_amount(row_a[mapping.amount_a])
-        amount_b = parse_amount(row_b[mapping.amount_b])
-        amount_score = 0.0
-        if amount_a is not None and amount_b is not None:
-            difference = abs(amount_a - amount_b)
-            if difference <= Decimal(str(settings.amount_tolerance)):
-                amount_score = 0.20
-            amount_detail = f"difference {difference}; tolerance {settings.amount_tolerance:g}"
-        else:
-            amount_detail = "could not parse both amounts"
-        components.append(("amount", amount_detail, amount_score, 0.20))
-
-    if mapping.date_a and mapping.date_b:
-        date_a = parse_date(row_a[mapping.date_a])
-        date_b = parse_date(row_b[mapping.date_b])
-        date_score = 0.0
-        if date_a is not None and date_b is not None:
-            day_difference = abs((date_a - date_b).days)
-            if day_difference <= settings.date_window_days:
-                date_score = 0.10
-            date_detail = (
-                f"difference {day_difference} day(s); window {settings.date_window_days}"
-            )
-        else:
-            date_detail = "could not parse both dates"
-        components.append(("date", date_detail, date_score, 0.10))
-
-    available_weight = sum(weight for _, _, _, weight in components)
-    raw_score = sum(score for _, _, score, _ in components)
-    final_score = raw_score / available_weight
-    evidence = tuple(
-        Evidence(field=field, detail=detail, score=round(score / available_weight, 6))
-        for field, detail, score, _ in components
-    )
-    return round(min(final_score, 1.0), 6), evidence
+    score, evidence, _ = _evaluate_pair(row_a, row_b, build_rules(mapping, settings))
+    return score, evidence
 
 
-def reconcile(
+def _score_candidates(
     table_a: CsvTable,
     table_b: CsvTable,
     mapping: FieldMapping,
     settings: MatchSettings,
-) -> tuple[MatchDecision, ...]:
-    candidates_by_a: dict[int, list[CandidateScore]] = {}
-    for a_index, row_a in enumerate(table_a.rows):
-        candidates: list[CandidateScore] = []
-        for b_index, row_b in enumerate(table_b.rows):
-            score, evidence = score_pair(row_a, row_b, mapping, settings)
-            if score >= settings.review_threshold:
-                candidates.append(
-                    CandidateScore(
-                        a_index=a_index,
-                        b_index=b_index,
-                        score=score,
-                        evidence=evidence,
-                    )
-                )
-        candidates.sort(key=lambda candidate: (-candidate.score, candidate.b_index))
-        candidates_by_a[a_index] = candidates
+    generation: CandidateGeneration,
+) -> tuple[CandidateScore, ...]:
+    rules = build_rules(mapping, settings)
+    scored: list[CandidateScore] = []
 
-    selected: list[MatchDecision] = []
-    used_b: set[int] = set()
-    ordered_a = sorted(
-        range(len(table_a.rows)),
-        key=lambda index: -(candidates_by_a[index][0].score if candidates_by_a[index] else -1.0),
+    for a_index, b_indices in enumerate(generation.by_a):
+        row_a = table_a.rows[a_index]
+        for b_index in b_indices:
+            score, evidence, raw_scores = _evaluate_pair(row_a, table_b.rows[b_index], rules)
+            if not _is_viable(raw_scores, settings) or score < settings.review_threshold:
+                continue
+            scored.append(
+                CandidateScore(
+                    a_index=a_index,
+                    b_index=b_index,
+                    score=score,
+                    evidence=evidence,
+                )
+            )
+
+    return tuple(
+        sorted(
+            scored,
+            key=lambda candidate: (-candidate.score, candidate.a_index, candidate.b_index),
+        )
     )
 
-    for a_index in ordered_a:
-        available = [
-            candidate
-            for candidate in candidates_by_a[a_index]
-            if candidate.b_index not in used_b
-        ]
-        if not available:
+
+def _is_ambiguous(
+    candidate: CandidateScore,
+    candidates: tuple[CandidateScore, ...],
+    margin: float,
+) -> bool:
+    for alternative in candidates:
+        if alternative is candidate:
+            continue
+        shares_a = alternative.a_index == candidate.a_index
+        shares_b = alternative.b_index == candidate.b_index
+        if (shares_a or shares_b) and candidate.score - alternative.score < margin:
+            return True
+    return False
+
+
+def reconcile_with_diagnostics(
+    table_a: CsvTable,
+    table_b: CsvTable,
+    mapping: FieldMapping,
+    settings: MatchSettings,
+) -> tuple[tuple[MatchDecision, ...], CandidateGeneration]:
+    generation = generate_candidates(table_a, table_b, mapping, settings)
+    candidates = _score_candidates(table_a, table_b, mapping, settings, generation)
+
+    selected: list[MatchDecision] = []
+    used_a: set[int] = set()
+    used_b: set[int] = set()
+
+    for candidate in candidates:
+        if candidate.a_index in used_a or candidate.b_index in used_b:
+            continue
+        ambiguous = _is_ambiguous(candidate, candidates, settings.ambiguity_margin)
+        status = (
+            MatchStatus.AUTO_MATCHED
+            if candidate.score >= settings.auto_threshold and not ambiguous
+            else MatchStatus.REVIEW
+        )
+        used_a.add(candidate.a_index)
+        used_b.add(candidate.b_index)
+        selected.append(
+            MatchDecision(
+                a_index=candidate.a_index,
+                b_index=candidate.b_index,
+                score=candidate.score,
+                status=status,
+                evidence=candidate.evidence,
+            )
+        )
+
+    for a_index in range(len(table_a.rows)):
+        if a_index not in used_a:
             selected.append(
                 MatchDecision(
                     a_index=a_index,
@@ -159,26 +271,6 @@ def reconcile(
                     evidence=(),
                 )
             )
-            continue
-
-        best = available[0]
-        runner_up_score = available[1].score if len(available) > 1 else 0.0
-        ambiguous = best.score - runner_up_score < settings.ambiguity_margin
-        status = (
-            MatchStatus.AUTO_MATCHED
-            if best.score >= settings.auto_threshold and not ambiguous
-            else MatchStatus.REVIEW
-        )
-        used_b.add(best.b_index)
-        selected.append(
-            MatchDecision(
-                a_index=a_index,
-                b_index=best.b_index,
-                score=best.score,
-                status=status,
-                evidence=best.evidence,
-            )
-        )
 
     for b_index in range(len(table_b.rows)):
         if b_index not in used_b:
@@ -192,7 +284,7 @@ def reconcile(
                 )
             )
 
-    return tuple(
+    decisions = tuple(
         sorted(
             selected,
             key=lambda decision: (
@@ -202,3 +294,14 @@ def reconcile(
             ),
         )
     )
+    return decisions, generation
+
+
+def reconcile(
+    table_a: CsvTable,
+    table_b: CsvTable,
+    mapping: FieldMapping,
+    settings: MatchSettings,
+) -> tuple[MatchDecision, ...]:
+    decisions, _ = reconcile_with_diagnostics(table_a, table_b, mapping, settings)
+    return decisions

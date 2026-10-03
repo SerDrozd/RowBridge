@@ -26,6 +26,15 @@
 
   <div class="mapping-block">
     <div>
+      <span class="label">Secondary text field</span>
+      <p class="hint">Optional. A customer, company, email, or description that can confirm a fuzzy primary match.</p>
+    </div>
+    <select name="secondary_a"><option value="">A · none</option>{% for header in table_a.headers %}<option value="{{ header }}">A · {{ header }}</option>{% endfor %}</select>
+    <select name="secondary_b"><option value="">B · none</option>{% for header in table_b.headers %}<option value="{{ header }}">B · {{ header }}</option>{% endfor %}</select>
+  </div>
+
+  <div class="mapping-block">
+    <div>
       <span class="label">Amount field</span>
       <p class="hint">Optional. Select both sides to add a tolerance check.</p>
     </div>

@@ -42,7 +42,7 @@
           </td>
           <td class="evidence">
             {% if match.evidence %}
-              {% for item in match.evidence %}<div>{{ item.detail }} <span>+{{ "%.0f"|format(item.score * 100) }}</span></div>{% endfor %}
+              {% for item in match.evidence %}<div><b>{{ item.field|replace("_", " ") }}</b> {{ item.detail }} <span>+{{ "%.0f"|format(item.score * 100) }}</span></div>{% endfor %}
             {% else %}<span class="muted">No candidate above review threshold.</span>{% endif %}
           </td>
         </tr>

@@ -8,8 +8,16 @@ from fastapi.testclient import TestClient
 from rowbridge.config import Settings
 from rowbridge.web import create_app
 
-A_CSV = b"invoice_ref,amount,date\nINV-1,10.00,2026-10-01\nINV-2,20.00,2026-10-02\n"
-B_CSV = b"reference,total,paid_at\nINV1,10.01,2026-10-02\nOTHER,99.00,2026-10-02\n"
+A_CSV = (
+    b"invoice_ref,customer,amount,date\n"
+    b"INV-1,Acme Ltd,10.00,2026-10-01\n"
+    b"INV-2,Blue Finch GmbH,20.00,2026-10-02\n"
+)
+B_CSV = (
+    b"reference,payer,total,paid_at\n"
+    b"INV1,ACME Limited,10.01,2026-10-02\n"
+    b"INV-9,Blue Finch GmbH,20.00,2026-10-02\n"
+)
 
 
 def make_client(tmp_path: Path) -> TestClient:
@@ -28,6 +36,7 @@ def test_vertical_slice_upload_map_persist_render_and_export(tmp_path: Path) -> 
         },
     )
     assert prepared.status_code == 200
+    assert "Secondary text field" in prepared.text
     stage_match = re.search(r'data-stage-id="([a-f0-9]+)"', prepared.text)
     assert stage_match is not None
 
@@ -37,6 +46,8 @@ def test_vertical_slice_upload_map_persist_render_and_export(tmp_path: Path) -> 
             "stage_id": stage_match.group(1),
             "primary_a": "invoice_ref",
             "primary_b": "reference",
+            "secondary_a": "customer",
+            "secondary_b": "payer",
             "amount_a": "amount",
             "amount_b": "total",
             "date_a": "date",
@@ -54,8 +65,8 @@ def test_vertical_slice_upload_map_persist_render_and_export(tmp_path: Path) -> 
     assert "Reconciliation results" in results.text
     assert "INV-1" in results.text
     assert "INV1" in results.text
+    assert "Blue Finch GmbH" in results.text
 
-    # A fresh app instance must be able to read the same persisted run.
     fresh_client = make_client(tmp_path)
     persisted = fresh_client.get(location)
     assert persisted.status_code == 200

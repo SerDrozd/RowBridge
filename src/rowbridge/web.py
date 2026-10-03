@@ -40,7 +40,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     repository.initialize()
     templates = Jinja2Templates(directory=PACKAGE_DIR / "templates")
 
-    app = FastAPI(title="RowBridge", version="0.1.0")
+    app = FastAPI(title="RowBridge", version="0.2.0")
     app.mount("/static", StaticFiles(directory=PACKAGE_DIR / "static"), name="static")
 
     @app.get("/", response_class=HTMLResponse)
@@ -90,6 +90,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         stage_id: str = Form(...),
         primary_a: str = Form(...),
         primary_b: str = Form(...),
+        secondary_a: str = Form(""),
+        secondary_b: str = Form(""),
         amount_a: str = Form(""),
         amount_b: str = Form(""),
         date_a: str = Form(""),
@@ -120,6 +122,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         mapping = FieldMapping(
             primary_a=primary_a,
             primary_b=primary_b,
+            secondary_a=_optional_column(secondary_a),
+            secondary_b=_optional_column(secondary_b),
             amount_a=_optional_column(amount_a),
             amount_b=_optional_column(amount_b),
             date_a=_optional_column(date_a),

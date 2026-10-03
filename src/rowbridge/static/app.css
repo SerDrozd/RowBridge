@@ -50,6 +50,7 @@ td small { margin-top: 4px; color: #8993a4; }
 .status.unmatched { background: #f7e9eb; color: #8a3240; }
 .evidence { min-width: 320px; color: #4d596c; }
 .evidence div + div { margin-top: 5px; }
+.evidence b { display: inline-block; min-width: 76px; text-transform: capitalize; }
 .evidence span { color: #8a94a5; font-size: 12px; }
 .muted { color: #96a0b0; }
 @media (max-width: 760px) {

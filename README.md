@@ -2,17 +2,20 @@
 
 RowBridge is a local-first workbench for reconciling two CSV exports when the same real record is represented differently on each side.
 
-It is aimed at operational data work where a clean shared ID is missing or inconsistent. Instead of returning an opaque match flag, RowBridge records the evidence that contributed to each proposed pair and separates confident matches from rows that need review.
+It is aimed at operational data work where a clean shared ID is missing or inconsistent. Instead of returning an opaque match flag, RowBridge records the evidence behind each proposed pair and separates confident matches from rows that need review.
 
 ## Current capabilities
 
 - upload two UTF-8 CSV files locally;
 - map a primary identity field on each side;
+- optionally map a secondary text field such as customer, company, email, or description;
 - optionally map amount and date fields;
-- normalize and fuzzy-match the primary values;
+- normalize and fuzzy-match text with deterministic comparison rules;
 - apply amount tolerance and date-window checks;
-- preserve one-to-one matching on Side B;
-- classify results as auto matched, review, or unmatched;
+- generate a bounded candidate set instead of scoring every possible row pair on the normal path;
+- use a fuzzy fallback only for rows that have no useful block candidate;
+- preserve one-to-one matching across both sides;
+- detect close competitors on either side and keep ambiguous pairs in review;
 - persist runs and source rows in SQLite;
 - reopen a saved run after an application restart;
 - export a reconciliation CSV with the evidence summary.
@@ -30,11 +33,12 @@ uv run rowbridge
 
 Open `http://127.0.0.1:8000` in a browser.
 
-For a small example, use:
+For the included example, use:
 
 - `examples/orders.csv` as Side A;
 - `examples/payments.csv` as Side B;
 - `invoice_ref` ↔ `reference` as the primary fields;
+- `customer` ↔ `payer` as the secondary text fields;
 - `amount` ↔ `total` as the amount fields;
 - `invoice_date` ↔ `paid_at` as the date fields.
 
@@ -42,11 +46,15 @@ Application data is stored in `.rowbridge/` by default. Set `ROWBRIDGE_DATA_DIR`
 
 ## Matching behavior
 
-The current scorer is intentionally small and deterministic. Primary text contributes up to 70% of a match score. An amount within the configured tolerance contributes 20%, and a date inside the configured window contributes 10%.
+RowBridge builds typed comparison rules from the selected field mapping. With all four rule types selected, primary text contributes 55% of the score, secondary text 20%, amount 15%, and date 10%. When the secondary field is not selected, the primary/amount/date weights are 70%/20%/10%. Missing optional rule types are removed and the remaining weights are normalized.
 
-A candidate above the auto-match threshold is still sent to review when another candidate is too close to it. Side B rows are used at most once in a run.
+Candidate generation uses normalized primary blocks first, then optional secondary and amount/date support blocks. Exact normalized primary values take the shortest path. If no block yields a candidate, RowBridge performs a small fuzzy fallback rather than silently declaring the row unmatched. Candidate sets are capped per source row.
 
-This is not an accounting engine, master-data-management system, or automatic data-correction tool. Large datasets and richer candidate generation are outside the current scope.
+Support fields do not automatically rescue a clearly unrelated primary value. A lower primary similarity can only be rescued when a strong secondary-text match is present together with amount or date support. This keeps common amounts and dates from filling the review queue with unrelated pairs.
+
+One-to-one selection is global and deterministic. A selected pair is sent to review when its score is below the auto threshold or another candidate for either source row is within the ambiguity margin.
+
+This is not an accounting engine, master-data-management system, or automatic data-correction tool. Human review actions are the next product milestone.
 
 ## Development
 
@@ -56,19 +64,21 @@ uv run mypy src tests
 uv run pytest
 ```
 
-The web integration test exercises the full local flow: upload, field mapping, matching, SQLite persistence, results rendering, application restart, and CSV export.
+The test suite covers typed comparison rules, candidate pruning, fuzzy fallback, support-field rescue rules, one-to-one competition, and the full web flow from upload through SQLite persistence and CSV export.
 
 ## Project structure
 
 ```text
 src/rowbridge/
-  ingestion.py   CSV validation and staging
-  matching.py    normalization, scoring, and one-to-one decisions
-  service.py     reconciliation use case
-  storage.py     SQLite persistence
-  web.py         FastAPI routes
-  templates/     server-rendered UI
-  static/        local CSS
+  candidates.py      candidate indexes, blocking, and bounded fuzzy fallback
+  ingestion.py       CSV validation and staging
+  matching.py        typed rule scoring and one-to-one decisions
+  matching_utils.py  normalization and value parsing
+  service.py         reconciliation use case
+  storage.py         SQLite persistence
+  web.py             FastAPI routes
+  templates/         server-rendered UI
+  static/            local CSS
 ```
 
 ## Privacy
