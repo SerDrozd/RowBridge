@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <title>{% block title %}RowBridge{% endblock %}</title>
-  <link rel="stylesheet" href="{{ url_for('static', path='/app.css') }}?v=m4.5">
-  <script src="{{ url_for('static', path='/app.js') }}?v=m4.5" defer></script>
+  <link rel="stylesheet" href="{{ url_for('static', path='/app.css') }}?v=m4.4">
+  <script src="{{ url_for('static', path='/app.js') }}?v=m4.4" defer></script>
 </head>
 <body>
   <header class="app-header">
@@ -17,7 +17,7 @@
       </a>
       <nav class="app-nav" aria-label="Application">
         <a href="/">New reconciliation</a>
-        <span class="local-state"><i aria-hidden="true"></i>Runs locally</span>
+        <span class="local-state"><i aria-hidden="true"></i>Local only</span>
       </nav>
     </div>
   </header>

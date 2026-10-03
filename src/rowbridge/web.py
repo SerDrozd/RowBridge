@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import csv
 import io
 import json
 from pathlib import Path
@@ -13,7 +12,15 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from rowbridge.config import Settings
-from rowbridge.ingestion import CsvInputError, parse_csv_bytes, read_staged_csv, write_staged_csv
+from rowbridge.exports import build_reconciliation_csv, build_reconciliation_xlsx
+from rowbridge.ingestion import (
+    InputFileError,
+    parse_input_bytes,
+    preview_rows,
+    read_staged_input,
+    staged_filename,
+    write_staged_input,
+)
 from rowbridge.models import CsvTable, FieldMapping, MatchSettings, MatchStatus, RowPayload
 from rowbridge.service import create_reconciliation_run
 from rowbridge.storage import Repository, StoredMatch
@@ -42,6 +49,14 @@ def _display_value(match: StoredMatch, side: str, column: str) -> str:
     return _payload_value(payload, column)
 
 
+def _table_details(table: CsvTable) -> str:
+    if table.source_format == "xlsx":
+        return f"Excel workbook · sheet {table.sheet_name or 'first data sheet'}"
+    delimiter_names = {",": "comma", ";": "semicolon", "\t": "tab", "|": "pipe"}
+    delimiter = delimiter_names.get(table.delimiter or ",", repr(table.delimiter or ","))
+    return f"CSV · {table.encoding or 'unknown encoding'} · {delimiter} delimiter"
+
+
 def _filter_matches(matches: tuple[StoredMatch, ...], view: str) -> tuple[StoredMatch, ...]:
     if view == "all":
         return matches
@@ -54,6 +69,14 @@ def _filter_matches(matches: tuple[StoredMatch, ...], view: str) -> tuple[Stored
     raise ValueError("Unknown result view")
 
 
+def _stage_metadata(stage_dir: Path) -> dict[str, str]:
+    metadata_path = stage_dir / "metadata.json"
+    if not metadata_path.is_file():
+        raise InputFileError("Staged upload metadata was not found. Upload the files again.")
+    raw = json.loads(metadata_path.read_text(encoding="utf-8"))
+    return {str(key): str(value) for key, value in raw.items()}
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     app_settings = settings or Settings.from_env()
     app_settings.ensure_directories()
@@ -61,7 +84,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     repository.initialize()
     templates = Jinja2Templates(directory=PACKAGE_DIR / "templates")
 
-    app = FastAPI(title="RowBridge", version="0.3.0")
+    app = FastAPI(title="RowBridge", version="0.4.0")
     app.mount("/static", StaticFiles(directory=PACKAGE_DIR / "static"), name="static")
 
     @app.get("/", response_class=HTMLResponse)
@@ -76,23 +99,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> HTMLResponse:
         filename_a = file_a.filename or "side-a.csv"
         filename_b = file_b.filename or "side-b.csv"
-        if not filename_a.lower().endswith(".csv") or not filename_b.lower().endswith(".csv"):
-            raise HTTPException(status_code=400, detail="This version accepts CSV files only")
-
         content_a = await file_a.read()
         content_b = await file_b.read()
         try:
-            table_a = parse_csv_bytes(content_a, filename_a)
-            table_b = parse_csv_bytes(content_b, filename_b)
-        except CsvInputError as exc:
+            table_a = parse_input_bytes(content_a, filename_a)
+            table_b = parse_input_bytes(content_b, filename_b)
+            staged_a = staged_filename("a", filename_a)
+            staged_b = staged_filename("b", filename_b)
+        except InputFileError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         stage_id = uuid4().hex
         stage_dir = app_settings.upload_dir / stage_id
-        write_staged_csv(stage_dir / "a.csv", content_a)
-        write_staged_csv(stage_dir / "b.csv", content_b)
+        write_staged_input(stage_dir / staged_a, content_a)
+        write_staged_input(stage_dir / staged_b, content_b)
         (stage_dir / "metadata.json").write_text(
-            json.dumps({"filename_a": filename_a, "filename_b": filename_b}),
+            json.dumps(
+                {
+                    "filename_a": filename_a,
+                    "filename_b": filename_b,
+                    "staged_a": staged_a,
+                    "staged_b": staged_b,
+                }
+            ),
             encoding="utf-8",
         )
 
@@ -103,6 +132,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "stage_id": stage_id,
                 "table_a": table_a,
                 "table_b": table_b,
+                "preview_a": preview_rows(table_a),
+                "preview_b": preview_rows(table_b),
+                "details_a": _table_details(table_a),
+                "details_b": _table_details(table_b),
             },
         )
 
@@ -124,18 +157,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail="Invalid staged upload id")
         stage_dir = app_settings.upload_dir / stage_id
         try:
-            table_a = read_staged_csv(stage_dir / "a.csv")
-            table_b = read_staged_csv(stage_dir / "b.csv")
-        except CsvInputError as exc:
+            metadata = _stage_metadata(stage_dir)
+            filename_a = metadata["filename_a"]
+            filename_b = metadata["filename_b"]
+            staged_a = metadata.get("staged_a", "a.csv")
+            staged_b = metadata.get("staged_b", "b.csv")
+            table_a = read_staged_input(stage_dir / staged_a, filename_a)
+            table_b = read_staged_input(stage_dir / staged_b, filename_b)
+        except (InputFileError, KeyError, json.JSONDecodeError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-        metadata_path = stage_dir / "metadata.json"
-        if metadata_path.is_file():
-            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-            filename_a = str(metadata.get("filename_a", table_a.filename))
-            filename_b = str(metadata.get("filename_b", table_b.filename))
-            table_a = CsvTable(filename_a, table_a.headers, table_a.rows)
-            table_b = CsvTable(filename_b, table_b.headers, table_b.rows)
 
         if amount_tolerance < 0 or date_window_days < 0:
             raise HTTPException(status_code=400, detail="Tolerances cannot be negative")
@@ -243,37 +273,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         run = repository.get_run(run_id)
         if run is None:
             raise HTTPException(status_code=404, detail="Run not found")
-        matches = repository.list_matches(run_id)
-
-        output = io.StringIO()
-        writer = csv.writer(output, lineterminator="\n")
-        writer.writerow(
-            [
-                "status",
-                "score",
-                "side_a_row",
-                "side_b_row",
-                "side_a_primary",
-                "side_b_primary",
-                "evidence",
-            ]
-        )
-        for match in matches:
-            evidence = " | ".join(item.detail for item in match.evidence)
-            score = "" if match.status == MatchStatus.MANUAL_MATCHED else f"{match.score:.4f}"
-            writer.writerow(
-                [
-                    match.status.value,
-                    score,
-                    match.a_row_number or "",
-                    match.b_row_number or "",
-                    _display_value(match, "a", run.mapping.primary_a),
-                    _display_value(match, "b", run.mapping.primary_b),
-                    evidence,
-                ]
-            )
+        content = "\ufeff" + build_reconciliation_csv(run, repository.list_matches(run_id))
         headers = {"Content-Disposition": f'attachment; filename="rowbridge-{run_id[:8]}.csv"'}
-        return StreamingResponse(iter([output.getvalue()]), media_type="text/csv", headers=headers)
+        return StreamingResponse(
+            iter([content]),
+            media_type="text/csv; charset=utf-8",
+            headers=headers,
+        )
+
+    @app.get("/runs/{run_id}/export.xlsx")
+    def export_xlsx(run_id: str) -> StreamingResponse:
+        run = repository.get_run(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        content = build_reconciliation_xlsx(
+            run,
+            repository.list_matches(run_id),
+            repository.list_review_events(run_id),
+        )
+        headers = {
+            "Content-Disposition": f'attachment; filename="rowbridge-{run_id[:8]}.xlsx"'
+        }
+        media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        return StreamingResponse(io.BytesIO(content), media_type=media_type, headers=headers)
 
     return app
 

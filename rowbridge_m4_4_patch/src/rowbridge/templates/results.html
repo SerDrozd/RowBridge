@@ -1,47 +1,47 @@
 {% extends "base.html" %}
 {% block title %}Results | RowBridge{% endblock %}
 {% block content %}
-<section class="page results-page">
-  <div class="results-heading">
+<section class="page page-results">
+  <header class="results-topbar">
     <div>
-      <p class="eyebrow">Run {{ run.id[:8] }}</p>
+      <p class="kicker">Run {{ run.id[:8] }}</p>
       <h1>Reconciliation results</h1>
-      <p class="lead">{{ run.filename_a }} <span class="pair-arrow">↔</span> {{ run.filename_b }}</p>
+      <p>{{ run.filename_a }} <span>↔</span> {{ run.filename_b }}</p>
     </div>
     <div class="export-actions">
       <a class="button button-secondary" href="/runs/{{ run.id }}/export.csv">Export CSV</a>
       <a class="button button-primary" href="/runs/{{ run.id }}/export.xlsx">Export workbook</a>
     </div>
+  </header>
+
+  <div class="summary-strip" aria-label="Run summary">
+    <span><b>{{ summary.auto_matched }}</b><small>Auto matched</small></span>
+    <span><b>{{ summary.human_matched }}</b><small>Human matched</small></span>
+    <span class="summary-review"><b>{{ summary.review }}</b><small>Needs review</small></span>
+    <span><b>{{ summary.unmatched }}</b><small>Unmatched</small></span>
+    <span><b>{{ run.total_a + run.total_b }}</b><small>Source rows</small></span>
   </div>
 
-  <div class="summary-bar" aria-label="Run summary">
-    <div><strong>{{ summary.auto_matched }}</strong><span>Auto matched</span></div>
-    <div><strong>{{ summary.human_matched }}</strong><span>Human matched</span></div>
-    <div class="summary-review"><strong>{{ summary.review }}</strong><span>Needs review</span></div>
-    <div><strong>{{ summary.unmatched }}</strong><span>Unmatched rows</span></div>
-    <div><strong>{{ run.total_a + run.total_b }}</strong><span>Source rows</span></div>
-  </div>
-
-  <div class="results-grid">
-    <section class="results-main">
-      <div class="results-tools">
+  <div class="results-layout">
+    <section class="results-panel">
+      <div class="results-panel-head">
         <nav class="tabs" aria-label="Result filters">
           <a class="{% if active_view == 'all' %}active{% endif %}" href="/runs/{{ run.id }}">All</a>
-          <a class="{% if active_view == 'review' %}active{% endif %}" href="/runs/{{ run.id }}?view=review">Needs review{% if summary.review %} <span>{{ summary.review }}</span>{% endif %}</a>
+          <a class="{% if active_view == 'review' %}active{% endif %}" href="/runs/{{ run.id }}?view=review">Review{% if summary.review %} <span>{{ summary.review }}</span>{% endif %}</a>
           <a class="{% if active_view == 'matched' %}active{% endif %}" href="/runs/{{ run.id }}?view=matched">Matched</a>
           <a class="{% if active_view == 'unmatched' %}active{% endif %}" href="/runs/{{ run.id }}?view=unmatched">Unmatched</a>
         </nav>
-        <p>Scores are suggestions until confirmed.</p>
+        <span>Scores are suggestions until confirmed.</span>
       </div>
 
-      <div class="table-scroll results-table-wrap">
-        <table class="data-table results-table">
+      <div class="results-table-scroll">
+        <table class="results-table">
           <thead><tr><th>Status</th><th>Score</th><th>Side A</th><th>Side B</th><th>Evidence</th><th>Action</th></tr></thead>
           <tbody>
           {% for match in matches %}
             <tr class="result-row result-{{ match.status.value }}">
               <td><span class="status {{ match.status.value }}">{{ match.status.value|replace('_', ' ') }}</span></td>
-              <td class="score-cell">{% if match.status.value == 'manual_matched' %}<span class="muted">Manual</span>{% elif match.score %}<strong>{{ "%.0f"|format(match.score * 100) }}%</strong>{% else %}<span class="muted">-</span>{% endif %}</td>
+              <td>{% if match.status.value == 'manual_matched' %}<span class="muted">Manual</span>{% elif match.score %}<strong>{{ "%.0f"|format(match.score * 100) }}%</strong>{% else %}<span class="muted">-</span>{% endif %}</td>
               <td class="record">{% if match.a_payload %}<strong>{{ display_value(match, 'a', run.mapping.primary_a) }}</strong><small>row {{ match.a_row_number }}</small>{% else %}<span class="muted">No row</span>{% endif %}</td>
               <td class="record">{% if match.b_payload %}<strong>{{ display_value(match, 'b', run.mapping.primary_b) }}</strong><small>row {{ match.b_row_number }}</small>{% else %}<span class="muted">No row</span>{% endif %}</td>
               <td>{% if match.evidence %}<dl class="evidence-list">{% for item in match.evidence %}<div><dt>{{ item.field|replace('_', ' ') }}</dt><dd>{{ item.detail }}{% if item.score %}<em>+{{ "%.0f"|format(item.score * 100) }}</em>{% endif %}</dd></div>{% endfor %}</dl>{% else %}<span class="muted">No candidate above review threshold.</span>{% endif %}</td>
@@ -53,24 +53,21 @@
       </div>
     </section>
 
-    <aside class="review-panel">
+    <aside class="review-sidebar">
       <section>
-        <p class="eyebrow">Manual resolution</p>
-        <h2>Link unmatched rows</h2>
-        <p class="panel-help">Use this only when you know the two records refer to the same real item.</p>
+        <header><p class="kicker">Manual resolution</p><h2>Link unmatched rows</h2></header>
         {% if unmatched_a and unmatched_b %}
         <form class="manual-link-form" method="post" action="/runs/{{ run.id }}/manual-links">
-          <label><span>Side A row</span><select name="a_match_id" required>{% for match in unmatched_a %}<option value="{{ match.id }}">row {{ match.a_row_number }} · {{ display_value(match, 'a', run.mapping.primary_a) }}</option>{% endfor %}</select></label>
-          <label><span>Side B row</span><select name="b_match_id" required>{% for match in unmatched_b %}<option value="{{ match.id }}">row {{ match.b_row_number }} · {{ display_value(match, 'b', run.mapping.primary_b) }}</option>{% endfor %}</select></label>
+          <label><span>Side A</span><select name="a_match_id" required>{% for match in unmatched_a %}<option value="{{ match.id }}">row {{ match.a_row_number }} · {{ display_value(match, 'a', run.mapping.primary_a) }}</option>{% endfor %}</select></label>
+          <label><span>Side B</span><select name="b_match_id" required>{% for match in unmatched_b %}<option value="{{ match.id }}">row {{ match.b_row_number }} · {{ display_value(match, 'b', run.mapping.primary_b) }}</option>{% endfor %}</select></label>
           <button class="button button-secondary" type="submit">Create manual link</button>
         </form>
-        {% else %}<p class="muted panel-empty">A manual link needs an unmatched row on each side.</p>{% endif %}
+        {% else %}<p class="muted sidebar-empty">A manual link needs an unmatched row on each side.</p>{% endif %}
       </section>
 
       <section class="history-section">
-        <p class="eyebrow">Audit trail</p>
-        <h2>Review history</h2>
-        <div class="history-list">
+        <header><p class="kicker">Audit trail</p><h2>Review history</h2></header>
+        <div class="history-scroll">
           {% if events %}{% for event in events %}
             <article class="history-item">
               <strong>{{ event.action.value|replace('_', ' ') }}</strong>
@@ -78,7 +75,7 @@
               <p class="history-detail">{{ event.detail }}</p>
               <small>{{ event.previous_status or 'none' }} → {{ event.resulting_status }} · {{ event.created_at }}</small>
             </article>
-          {% endfor %}{% else %}<p class="muted panel-empty">No human decisions yet.</p>{% endif %}
+          {% endfor %}{% else %}<p class="muted sidebar-empty">No human decisions yet.</p>{% endif %}
         </div>
       </section>
     </aside>

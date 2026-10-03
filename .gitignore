@@ -10,3 +10,4 @@ build/
 .rowbridge/
 .DS_Store
 Thumbs.db
+~$*.xlsx

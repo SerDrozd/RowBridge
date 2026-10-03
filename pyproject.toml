@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "rowbridge"
-version = "0.3.0"
-description = "Local-first workbench for reconciling two messy CSV exports with explainable matching."
+version = "0.4.0"
+description = "Local-first workbench for reconciling messy CSV and Excel exports with explainable matching."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { file = "LICENSE" }
@@ -13,6 +13,7 @@ authors = [{ name = "Serhii Drozdov" }]
 dependencies = [
   "fastapi>=0.118,<1",
   "jinja2>=3.1,<4",
+  "openpyxl>=3.1,<4",
   "python-multipart>=0.0.20,<1",
   "rapidfuzz>=3.14,<4",
   "uvicorn>=0.37,<1",
@@ -48,3 +49,7 @@ mypy_path = "src"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+
+[[tool.mypy.overrides]]
+module = ["openpyxl", "openpyxl.*"]
+ignore_missing_imports = true

@@ -1,28 +1,62 @@
 {% extends "base.html" %}
-{% block title %}RowBridge | Reconcile two CSV exports{% endblock %}
+{% block title %}New reconciliation | RowBridge{% endblock %}
 {% block content %}
-<section class="hero">
-  <p class="eyebrow">Local-first reconciliation</p>
-  <h1>Find the rows that refer to the same real record.</h1>
-  <p class="lede">Upload two CSV exports, map the fields that should agree, and inspect explainable matches without sending data to an external service.</p>
-</section>
-
-<section class="panel">
-  <form action="/prepare" method="post" enctype="multipart/form-data" class="stack">
-    <div class="file-grid">
-      <label class="file-card">
-        <span class="label">Side A</span>
-        <strong>First CSV export</strong>
-        <input type="file" name="file_a" accept=".csv,text/csv" required>
-      </label>
-      <label class="file-card">
-        <span class="label">Side B</span>
-        <strong>Second CSV export</strong>
-        <input type="file" name="file_b" accept=".csv,text/csv" required>
-      </label>
+<section class="page start-page">
+  <div class="start-heading">
+    <div>
+      <p class="eyebrow">New reconciliation</p>
+      <h1>Compare two exports</h1>
+      <p class="lead">Choose one CSV or Excel file on each side. You will preview both files and map the matching fields next.</p>
     </div>
-    <p class="hint">Current scope: UTF-8 CSV files up to 5 MB and 50,000 rows each.</p>
-    <button type="submit">Continue to field mapping</button>
+    <ol class="workflow" aria-label="Workflow">
+      <li class="active"><span>1</span>Files</li>
+      <li><span>2</span>Map fields</li>
+      <li><span>3</span>Review</li>
+      <li><span>4</span>Export</li>
+    </ol>
+  </div>
+
+  <form class="upload-form" action="/prepare" method="post" enctype="multipart/form-data" data-file-form>
+    <div class="source-grid">
+      <section class="source-panel" aria-labelledby="source-a-title">
+        <div class="source-title-row">
+          <span class="source-letter">A</span>
+          <div>
+            <p class="source-label">First source</p>
+            <h2 id="source-a-title">Choose a file</h2>
+          </div>
+        </div>
+        <p class="source-description">Orders, ledger, CRM export, vendor list, or another table.</p>
+        <div class="file-control-row">
+          <input hidden id="rb-file-a" type="file" name="file_a" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
+          <button class="button button-secondary" type="button" data-file-trigger="rb-file-a">Browse file</button>
+          <span class="selected-file" data-file-name-for="rb-file-a">No file selected</span>
+        </div>
+        <p class="source-meta">CSV or XLSX · up to 5 MB · up to 50,000 rows</p>
+      </section>
+
+      <section class="source-panel" aria-labelledby="source-b-title">
+        <div class="source-title-row">
+          <span class="source-letter">B</span>
+          <div>
+            <p class="source-label">Second source</p>
+            <h2 id="source-b-title">Choose a file</h2>
+          </div>
+        </div>
+        <p class="source-description">The export you want to reconcile against Side A.</p>
+        <div class="file-control-row">
+          <input hidden id="rb-file-b" type="file" name="file_b" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
+          <button class="button button-secondary" type="button" data-file-trigger="rb-file-b">Browse file</button>
+          <span class="selected-file" data-file-name-for="rb-file-b">No file selected</span>
+        </div>
+        <p class="source-meta">CSV or XLSX · up to 5 MB · up to 200 columns</p>
+      </section>
+    </div>
+
+    <div class="upload-footer">
+      <p>CSV support: UTF-8, UTF-16, Windows-1252. Delimiters: comma, semicolon, tab, pipe.</p>
+      <button class="button button-primary button-large" type="submit" data-submit-files disabled>Preview and map fields</button>
+    </div>
   </form>
 </section>
 {% endblock %}

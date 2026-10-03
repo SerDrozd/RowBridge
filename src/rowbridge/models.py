@@ -31,6 +31,10 @@ class CsvTable:
     filename: str
     headers: tuple[str, ...]
     rows: tuple[RowPayload, ...]
+    source_format: str = "csv"
+    encoding: str | None = None
+    delimiter: str | None = None
+    sheet_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

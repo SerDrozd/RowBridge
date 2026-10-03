@@ -107,8 +107,8 @@ def test_accept_review_persists_confirmation_and_audit_event(tmp_path: Path) -> 
     assert "confirmed" in persisted.text
     assert "Accepted proposed match." in persisted.text
     assert "accept" in persisted.text
-    assert "<strong>0</strong><span>Needs review</span>" in persisted.text
-    assert "<strong>1</strong><span>Human matched</span>" in persisted.text
+    assert "<b>0</b><small>Needs review</small>" in persisted.text
+    assert "<b>1</b><small>Human matched</small>" in persisted.text
 
     repeated = fresh_client.post(
         f"{location}/matches/{match_id}/accept",
@@ -131,8 +131,8 @@ def test_reject_review_then_manually_link_unmatched_rows(tmp_path: Path) -> None
 
     after_reject = client.get(location)
     assert "Rejected proposed match" in after_reject.text
-    assert "<strong>0</strong><span>Needs review</span>" in after_reject.text
-    assert "<strong>2</strong><span>Unmatched rows</span>" in after_reject.text
+    assert "<b>0</b><small>Needs review</small>" in after_reject.text
+    assert "<b>2</b><small>Unmatched</small>" in after_reject.text
 
     a_option = re.search(r'<option value="(\d+)">row 3 · INV-2</option>', after_reject.text)
     b_option = re.search(r'<option value="(\d+)">row 3 · INV-9</option>', after_reject.text)
@@ -153,8 +153,8 @@ def test_reject_review_then_manually_link_unmatched_rows(tmp_path: Path) -> None
     persisted = fresh_client.get(location)
     assert "manual matched" in persisted.text
     assert "Linked two previously unmatched rows manually." in persisted.text
-    assert "<strong>1</strong><span>Human matched</span>" in persisted.text
-    assert "<strong>0</strong><span>Unmatched rows</span>" in persisted.text
+    assert "<b>1</b><small>Human matched</small>" in persisted.text
+    assert "<b>0</b><small>Unmatched</small>" in persisted.text
 
     export = fresh_client.get(f"{location}/export.csv")
     assert "manual_matched,,3,3,INV-2,INV-9" in export.text
@@ -184,8 +184,8 @@ def test_home_file_picker_only_uses_explicit_browse_labels(tmp_path: Path) -> No
     assert 'data-file-trigger="rb-file-b"' in response.text
     assert 'hidden id="rb-file-a"' in response.text
     assert 'hidden id="rb-file-b"' in response.text
-    assert 'app.css?v=m4.5' in response.text
-    assert 'app.js?v=m4.5' in response.text
+    assert 'app.css?v=m4.4' in response.text
+    assert 'app.js?v=m4.4' in response.text
     assert 'class="file-input"' not in response.text
 
 def test_prepare_rejects_unsupported_files(tmp_path: Path) -> None:
@@ -237,7 +237,7 @@ def test_prepare_accepts_mixed_csv_and_xlsx_and_shows_preview(tmp_path: Path) ->
     )
 
     assert response.status_code == 200
-    assert "Map the fields that mean the same thing" in response.text
+    assert "Map comparable fields" in response.text
     assert "CSV · utf-8 · comma delimiter" in response.text
     assert "Excel workbook · sheet Data" in response.text
     assert "ACME Limited" in response.text

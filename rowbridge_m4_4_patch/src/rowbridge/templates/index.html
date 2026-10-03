@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}New reconciliation | RowBridge{% endblock %}
+{% block content %}
+<section class="page page-start">
+  <header class="page-toolbar">
+    <div>
+      <p class="kicker">New reconciliation</p>
+      <h1>Compare two data exports</h1>
+      <p>Choose one CSV or Excel file for each side, then map the fields that describe the same record.</p>
+    </div>
+    <ol class="stepbar" aria-label="Workflow">
+      <li class="current"><b>1</b><span>Files</span></li>
+      <li><b>2</b><span>Map</span></li>
+      <li><b>3</b><span>Review</span></li>
+      <li><b>4</b><span>Export</span></li>
+    </ol>
+  </header>
+
+  <form class="file-workspace" action="/prepare" method="post" enctype="multipart/form-data" data-file-form>
+    <section class="file-pane" aria-labelledby="source-a-title">
+      <div class="file-pane-title">
+        <span class="side-id">A</span>
+        <div><p class="kicker">First source</p><h2 id="source-a-title">Source file</h2></div>
+      </div>
+      <p class="file-help">Orders, ledger, CRM export, vendor list, or another table.</p>
+      <div class="file-row">
+        <input hidden id="rb-file-a" type="file" name="file_a" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
+        <button class="button button-secondary" type="button" data-file-trigger="rb-file-a">Browse file</button>
+        <span class="selected-file" data-file-name-for="rb-file-a">No file selected</span>
+      </div>
+      <dl class="file-facts">
+        <div><dt>Formats</dt><dd>CSV, XLSX</dd></div>
+        <div><dt>Limit</dt><dd>5 MB</dd></div>
+        <div><dt>Rows</dt><dd>50,000</dd></div>
+      </dl>
+    </section>
+
+    <section class="file-pane" aria-labelledby="source-b-title">
+      <div class="file-pane-title">
+        <span class="side-id">B</span>
+        <div><p class="kicker">Second source</p><h2 id="source-b-title">Source file</h2></div>
+      </div>
+      <p class="file-help">The export that should be reconciled against Side A.</p>
+      <div class="file-row">
+        <input hidden id="rb-file-b" type="file" name="file_b" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
+        <button class="button button-secondary" type="button" data-file-trigger="rb-file-b">Browse file</button>
+        <span class="selected-file" data-file-name-for="rb-file-b">No file selected</span>
+      </div>
+      <dl class="file-facts">
+        <div><dt>Formats</dt><dd>CSV, XLSX</dd></div>
+        <div><dt>Limit</dt><dd>5 MB</dd></div>
+        <div><dt>Columns</dt><dd>200</dd></div>
+      </dl>
+    </section>
+
+    <footer class="file-actions">
+      <p>CSV: UTF-8, UTF-16, Windows-1252 · comma, semicolon, tab, or pipe.</p>
+      <button class="button button-primary" type="submit" data-submit-files disabled>Continue to field mapping</button>
+    </footer>
+  </form>
+</section>
+{% endblock %}
