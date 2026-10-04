@@ -41,6 +41,20 @@ class RunSummary:
 
 
 @dataclass(frozen=True, slots=True)
+class RunListItem:
+    id: str
+    created_at: str
+    filename_a: str
+    filename_b: str
+    total_a: int
+    total_b: int
+    auto_matched: int
+    human_matched: int
+    review: int
+    unmatched: int
+
+
+@dataclass(frozen=True, slots=True)
 class StoredMatch:
     id: int
     status: MatchStatus
@@ -265,6 +279,75 @@ class Repository:
             review=counts.get(MatchStatus.REVIEW.value, 0),
             unmatched=counts.get(MatchStatus.UNMATCHED.value, 0),
         )
+
+    def count_runs(self) -> int:
+        with self._connect() as connection:
+            row = connection.execute("SELECT COUNT(*) AS count FROM runs").fetchone()
+        return 0 if row is None else int(row["count"])
+
+    def list_runs(self, *, limit: int, offset: int = 0) -> tuple[RunListItem, ...]:
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        if offset < 0:
+            raise ValueError("offset cannot be negative")
+
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    r.id,
+                    r.created_at,
+                    r.filename_a,
+                    r.filename_b,
+                    r.total_a,
+                    r.total_b,
+                    SUM(CASE WHEN m.status = ? THEN 1 ELSE 0 END) AS auto_matched,
+                    SUM(CASE WHEN m.status IN (?, ?) THEN 1 ELSE 0 END) AS human_matched,
+                    SUM(CASE WHEN m.status = ? THEN 1 ELSE 0 END) AS review,
+                    SUM(CASE WHEN m.status = ? THEN 1 ELSE 0 END) AS unmatched
+                FROM runs r
+                LEFT JOIN matches m ON m.run_id = r.id
+                GROUP BY
+                    r.id,
+                    r.created_at,
+                    r.filename_a,
+                    r.filename_b,
+                    r.total_a,
+                    r.total_b
+                ORDER BY r.created_at DESC, r.id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (
+                    MatchStatus.AUTO_MATCHED.value,
+                    MatchStatus.CONFIRMED.value,
+                    MatchStatus.MANUAL_MATCHED.value,
+                    MatchStatus.REVIEW.value,
+                    MatchStatus.UNMATCHED.value,
+                    limit,
+                    offset,
+                ),
+            ).fetchall()
+
+        return tuple(
+            RunListItem(
+                id=str(row["id"]),
+                created_at=str(row["created_at"]),
+                filename_a=str(row["filename_a"]),
+                filename_b=str(row["filename_b"]),
+                total_a=int(row["total_a"]),
+                total_b=int(row["total_b"]),
+                auto_matched=int(row["auto_matched"]),
+                human_matched=int(row["human_matched"]),
+                review=int(row["review"]),
+                unmatched=int(row["unmatched"]),
+            )
+            for row in rows
+        )
+
+    def delete_run(self, run_id: str) -> bool:
+        with self._connect() as connection:
+            cursor = connection.execute("DELETE FROM runs WHERE id = ?", (run_id,))
+        return cursor.rowcount == 1
 
     @staticmethod
     def _matches_from_rows(rows: list[sqlite3.Row]) -> tuple[StoredMatch, ...]:
