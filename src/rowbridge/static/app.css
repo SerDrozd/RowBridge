@@ -377,7 +377,7 @@ select:focus, input[type="number"]:focus { outline: 2px solid #bfd0e9; outline-o
   .review-panel section + section { border-left: 0; border-top: 1px solid var(--line); }
 }
 
-/* M5 hardening UI */
+/* Pagination and error states */
 .pagination {
   display: flex;
   align-items: center;

@@ -126,6 +126,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     repository = Repository(app_settings.database_path)
     repository.initialize()
     templates = Jinja2Templates(directory=PACKAGE_DIR / "templates")
+    templates.env.globals["app_version"] = __version__
 
     app = FastAPI(title="RowBridge", version=__version__)
     app.add_middleware(
