@@ -27,6 +27,8 @@ Source files are treated as read-only inputs. RowBridge may create temporary sta
 
 A successful run deletes its staged source copies. Abandoned staging directories expire automatically.
 
+Application data stored by RowBridge is not encrypted at rest. Deleting a saved run removes its records from RowBridge's local database, but is not intended to provide secure disk erasure.
+
 The reconciliation path has no required external API dependency.
 
 ## Reporting a vulnerability

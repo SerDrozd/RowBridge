@@ -15,7 +15,7 @@ Requirements: Python 3.12+ and [`uv`](https://docs.astral.sh/uv/).
 ```bash
 git clone https://github.com/SerDrozd/rowbridge.git
 cd rowbridge
-uv sync --extra dev
+uv sync
 uv run rowbridge
 ```
 
@@ -33,11 +33,13 @@ The included demo files can be reconciled with these mappings:
 
 Application state is stored in `.rowbridge/` by default. Set `ROWBRIDGE_DATA_DIR` to use another directory.
 
+Completed runs are saved locally under **Runs**, where they can be reopened or deleted explicitly.
+
 ## Typical workflow
 
 1. Load one CSV or XLSX export on each side.
 2. Preview the files and map equivalent fields.
-3. Review uncertain matches and accept, reject, or manually link rows.
+3. Review uncertain matches, accept or reject proposals, link unmatched rows manually, and revise those decisions when needed.
 4. Export the current reconciliation as CSV or XLSX.
 
 ![RowBridge file selection](docs/images/home.png)
@@ -83,11 +85,11 @@ Duplicate headers, empty headers, malformed rows, oversized workbook archives, u
 
 ## Review and audit trail
 
-A review candidate can be accepted or rejected. Unmatched rows can also be linked manually.
+A review candidate can be accepted or rejected, and unmatched rows can be linked manually. Confirmed matches can be reopened for review, and manual links can be unlinked when a decision needs to be revised.
 
-Accepted pairs keep their algorithmic score and evidence. Rejected pairs return both rows to the unmatched pool. Manual links are stored as human decisions without inventing an algorithmic confidence score.
+Rejected proposals return both rows to the unmatched pool. When both original rows are still unmatched, the proposal can be restored with its original algorithmic score and evidence.
 
-Review actions are appended to the run history with the affected rows, timestamp, previous state, resulting state, and a short explanation.
+Review actions, including reopen, unlink, and restore decisions, are appended to the run history with the affected rows, timestamp, previous state, resulting state, and a short explanation.
 
 ## Exports
 
