@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.0 - 2026-10-04
+
+### Added
+
+- saved run history with newest-first pagination;
+- reopening previous reconciliation results from the local history page;
+- current auto, human, review, and unmatched counts for saved runs;
+- explicit run deletion confirmation with cascading cleanup of related local data.
+
 ## 0.6.1 - 2026-10-04
 
 ### Fixed
