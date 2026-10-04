@@ -397,6 +397,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "summary": repository.get_summary(run_id),
                 "matches": visible_matches,
                 "events": repository.list_review_events(run_id, limit=100),
+                "restorable_rejected_event_ids": repository.restorable_rejected_event_ids(
+                    run_id
+                ),
                 "unmatched_a": unmatched_a,
                 "unmatched_b": unmatched_b,
                 "unmatched_a_count": unmatched_a_count,
@@ -431,6 +434,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return RedirectResponse(url=f"/runs/{run_id}#manual-link", status_code=303)
+
+    @app.post("/runs/{run_id}/matches/{match_id}/reopen")
+    def reopen_match(run_id: str, match_id: int) -> RedirectResponse:
+        if repository.get_run(run_id) is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        try:
+            repository.reopen_confirmed(run_id, match_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return RedirectResponse(url=f"/runs/{run_id}#review-history", status_code=303)
+
+    @app.post("/runs/{run_id}/matches/{match_id}/unlink")
+    def unlink_match(run_id: str, match_id: int) -> RedirectResponse:
+        if repository.get_run(run_id) is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        try:
+            repository.unlink_manual(run_id, match_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return RedirectResponse(url=f"/runs/{run_id}#manual-link", status_code=303)
+
+    @app.post("/runs/{run_id}/review-events/{event_id}/restore")
+    def restore_rejected(run_id: str, event_id: int) -> RedirectResponse:
+        if repository.get_run(run_id) is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        try:
+            repository.restore_rejected(run_id, event_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return RedirectResponse(url=f"/runs/{run_id}?view=review#review-history", status_code=303)
 
     @app.post("/runs/{run_id}/manual-links")
     def manual_link(

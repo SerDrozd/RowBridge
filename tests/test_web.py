@@ -249,6 +249,145 @@ def test_accept_review_persists_confirmation_and_audit_event(tmp_path: Path) -> 
     assert repeated.status_code == 409
 
 
+def test_confirmed_match_can_be_reopened_from_results(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    location = create_sample_run(client)
+    results = client.get(location)
+    match_id = review_match_id(results.text)
+
+    accepted = client.post(
+        f"{location}/matches/{match_id}/accept",
+        follow_redirects=False,
+    )
+    assert accepted.status_code == 303
+
+    confirmed = client.get(location)
+    assert f'action="{location}/matches/{match_id}/reopen"' in confirmed.text
+    assert ">Reopen review<" in confirmed.text
+
+    reopened = client.post(
+        f"{location}/matches/{match_id}/reopen",
+        follow_redirects=False,
+    )
+    assert reopened.status_code == 303
+    assert reopened.headers["location"] == f"{location}#review-history"
+
+    persisted = client.get(location)
+    assert f'action="{location}/matches/{match_id}/accept"' in persisted.text
+    assert "Reopened confirmed match for review." in persisted.text
+    assert "<strong>1</strong><span>Needs review</span>" in persisted.text
+    assert "<strong>0</strong><span>Human matched</span>" in persisted.text
+
+
+def test_rejected_proposal_can_be_restored_from_review_history(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    location = create_sample_run(client)
+    results = client.get(location)
+    match_id = review_match_id(results.text)
+
+    rejected = client.post(
+        f"{location}/matches/{match_id}/reject",
+        follow_redirects=False,
+    )
+    assert rejected.status_code == 303
+
+    after_reject = client.get(location)
+    restore_action = re.search(
+        rf'action="{re.escape(location)}/review-events/(\d+)/restore"',
+        after_reject.text,
+    )
+    assert restore_action is not None
+    assert ">Restore proposal<" in after_reject.text
+
+    restored = client.post(
+        f"{location}/review-events/{restore_action.group(1)}/restore",
+        follow_redirects=False,
+    )
+    assert restored.status_code == 303
+    assert restored.headers["location"] == f"{location}?view=review#review-history"
+
+    persisted = client.get(location)
+    assert "Restored rejected proposal to review." in persisted.text
+    assert "<strong>1</strong><span>Needs review</span>" in persisted.text
+    assert "<strong>0</strong><span>Unmatched rows</span>" in persisted.text
+    assert ">Restore proposal<" not in persisted.text
+
+
+def test_manual_match_can_be_unlinked_from_results(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    location = create_sample_run(client)
+    results = client.get(location)
+    match_id = review_match_id(results.text)
+
+    rejected = client.post(
+        f"{location}/matches/{match_id}/reject",
+        follow_redirects=False,
+    )
+    assert rejected.status_code == 303
+
+    after_reject = client.get(location)
+    a_option = re.search(r'<option value="(\d+)">row 3 · INV-2</option>', after_reject.text)
+    b_option = re.search(r'<option value="(\d+)">row 3 · INV-9</option>', after_reject.text)
+    assert a_option is not None
+    assert b_option is not None
+
+    linked = client.post(
+        f"{location}/manual-links",
+        data={
+            "a_match_id": a_option.group(1),
+            "b_match_id": b_option.group(1),
+        },
+        follow_redirects=False,
+    )
+    assert linked.status_code == 303
+
+    manual = client.get(location)
+    unlink_action = re.search(
+        rf'action="{re.escape(location)}/matches/(\d+)/unlink"',
+        manual.text,
+    )
+    assert unlink_action is not None
+    assert ">Unlink<" in manual.text
+
+    unlinked = client.post(
+        f"{location}/matches/{unlink_action.group(1)}/unlink",
+        follow_redirects=False,
+    )
+    assert unlinked.status_code == 303
+    assert unlinked.headers["location"] == f"{location}#manual-link"
+
+    persisted = client.get(location)
+    assert "Unlinked manual match; both rows returned to unmatched." in persisted.text
+    assert "<strong>0</strong><span>Human matched</span>" in persisted.text
+    assert "<strong>2</strong><span>Unmatched rows</span>" in persisted.text
+    assert "row 3 · INV-2" in persisted.text
+    assert "row 3 · INV-9" in persisted.text
+
+
+def test_reversible_review_routes_reject_invalid_transitions(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    location = create_sample_run(client)
+    results = client.get(location)
+    match_id = review_match_id(results.text)
+
+    reopen_review = client.post(
+        f"{location}/matches/{match_id}/reopen",
+        follow_redirects=False,
+    )
+    unlink_review = client.post(
+        f"{location}/matches/{match_id}/unlink",
+        follow_redirects=False,
+    )
+    missing_restore = client.post(
+        f"{location}/review-events/999999/restore",
+        follow_redirects=False,
+    )
+
+    assert reopen_review.status_code == 409
+    assert unlink_review.status_code == 409
+    assert missing_restore.status_code == 409
+
+
 def test_reject_review_then_manually_link_unmatched_rows(tmp_path: Path) -> None:
     client = make_client(tmp_path)
     location = create_sample_run(client)
