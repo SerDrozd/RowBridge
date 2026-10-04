@@ -27,7 +27,7 @@ class RuleKind(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
-class CsvTable:
+class InputTable:
     filename: str
     headers: tuple[str, ...]
     rows: tuple[RowPayload, ...]
@@ -35,6 +35,9 @@ class CsvTable:
     encoding: str | None = None
     delimiter: str | None = None
     sheet_name: str | None = None
+
+
+CsvTable = InputTable
 
 
 @dataclass(frozen=True, slots=True)

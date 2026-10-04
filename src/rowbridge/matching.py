@@ -11,9 +11,9 @@ from rowbridge.models import (
     CandidateGeneration,
     CandidateScore,
     ComparisonRule,
-    CsvTable,
     Evidence,
     FieldMapping,
+    InputTable,
     MatchDecision,
     MatchSettings,
     MatchStatus,
@@ -175,8 +175,8 @@ def score_pair(
 
 
 def _score_candidates(
-    table_a: CsvTable,
-    table_b: CsvTable,
+    table_a: InputTable,
+    table_b: InputTable,
     mapping: FieldMapping,
     settings: MatchSettings,
     generation: CandidateGeneration,
@@ -236,8 +236,8 @@ def _is_ambiguous(
 
 
 def reconcile_with_diagnostics(
-    table_a: CsvTable,
-    table_b: CsvTable,
+    table_a: InputTable,
+    table_b: InputTable,
     mapping: FieldMapping,
     settings: MatchSettings,
 ) -> tuple[tuple[MatchDecision, ...], CandidateGeneration]:
@@ -313,8 +313,8 @@ def reconcile_with_diagnostics(
 
 
 def reconcile(
-    table_a: CsvTable,
-    table_b: CsvTable,
+    table_a: InputTable,
+    table_b: InputTable,
     mapping: FieldMapping,
     settings: MatchSettings,
 ) -> tuple[MatchDecision, ...]:

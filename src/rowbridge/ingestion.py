@@ -11,7 +11,7 @@ from zipfile import BadZipFile, ZipFile
 
 from openpyxl import load_workbook
 
-from rowbridge.models import CsvTable
+from rowbridge.models import InputTable
 
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 MAX_XLSX_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
@@ -24,10 +24,6 @@ CSV_DELIMITERS = ",;\t|"
 
 class InputFileError(ValueError):
     pass
-
-
-# Backward-compatible name for older imports while the input layer becomes format-neutral.
-CsvInputError = InputFileError
 
 
 def _validate_size(content: bytes, filename: str) -> None:
@@ -85,7 +81,7 @@ def _normalize_headers(values: list[str], filename: str) -> tuple[str, ...]:
     return headers
 
 
-def parse_csv_bytes(content: bytes, filename: str) -> CsvTable:
+def parse_csv_bytes(content: bytes, filename: str) -> InputTable:
     _validate_size(content, filename)
     text, encoding = _decode_csv(content, filename)
     delimiter = _detect_delimiter(text)
@@ -110,7 +106,7 @@ def parse_csv_bytes(content: bytes, filename: str) -> CsvTable:
 
     if not rows:
         raise InputFileError(f"{filename} has no data rows")
-    return CsvTable(
+    return InputTable(
         filename=filename,
         headers=headers,
         rows=tuple(rows),
@@ -150,7 +146,7 @@ def _validate_xlsx_archive(content: bytes, filename: str) -> None:
         raise InputFileError(f"{filename} is not a valid XLSX workbook") from exc
 
 
-def parse_xlsx_bytes(content: bytes, filename: str) -> CsvTable:
+def parse_xlsx_bytes(content: bytes, filename: str) -> InputTable:
     _validate_size(content, filename)
     _validate_xlsx_archive(content, filename)
 
@@ -197,7 +193,7 @@ def parse_xlsx_bytes(content: bytes, filename: str) -> CsvTable:
 
         if not rows:
             raise InputFileError(f"{filename} has no data rows")
-        return CsvTable(
+        return InputTable(
             filename=filename,
             headers=headers,
             rows=tuple(rows),
@@ -208,7 +204,7 @@ def parse_xlsx_bytes(content: bytes, filename: str) -> CsvTable:
         workbook.close()
 
 
-def parse_input_bytes(content: bytes, filename: str) -> CsvTable:
+def parse_input_bytes(content: bytes, filename: str) -> InputTable:
     suffix = Path(filename).suffix.lower()
     if suffix not in SUPPORTED_SUFFIXES:
         raise InputFileError(f"{filename} is not supported. Use a .csv or .xlsx file.")
@@ -231,7 +227,7 @@ def write_staged_input(path: Path, content: bytes) -> None:
     path.write_bytes(content)
 
 
-def read_staged_input(path: Path, original_filename: str) -> CsvTable:
+def read_staged_input(path: Path, original_filename: str) -> InputTable:
     if not path.is_file():
         raise InputFileError("Staged upload was not found. Upload the files again.")
     return parse_input_bytes(path.read_bytes(), original_filename)
@@ -272,5 +268,5 @@ def cleanup_staged_uploads(
     return removed
 
 
-def preview_rows(table: CsvTable) -> tuple[dict[str, str], ...]:
+def preview_rows(table: InputTable) -> tuple[dict[str, str], ...]:
     return table.rows[:PREVIEW_ROWS]
