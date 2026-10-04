@@ -6,7 +6,7 @@ from uuid import uuid4
 
 from rowbridge.matching import reconcile
 from rowbridge.matching_utils import parse_amount, parse_date
-from rowbridge.models import CsvTable, FieldMapping, MatchSettings
+from rowbridge.models import FieldMapping, InputTable, MatchSettings
 from rowbridge.storage import Repository
 
 
@@ -30,7 +30,7 @@ def _validate_distinct_roles(mapping: FieldMapping) -> None:
 
 
 def _validate_parseable_column(
-    table: CsvTable,
+    table: InputTable,
     column: str,
     parser: Callable[[str], object | None],
     role: str,
@@ -48,7 +48,7 @@ def _validate_parseable_column(
         )
 
 
-def validate_mapping(table_a: CsvTable, table_b: CsvTable, mapping: FieldMapping) -> None:
+def validate_mapping(table_a: InputTable, table_b: InputTable, mapping: FieldMapping) -> None:
     selections = (
         ("primary_a", mapping.primary_a, table_a.headers),
         ("primary_b", mapping.primary_b, table_b.headers),
@@ -82,8 +82,8 @@ def validate_mapping(table_a: CsvTable, table_b: CsvTable, mapping: FieldMapping
 
 def create_reconciliation_run(
     repository: Repository,
-    table_a: CsvTable,
-    table_b: CsvTable,
+    table_a: InputTable,
+    table_b: InputTable,
     mapping: FieldMapping,
     settings: MatchSettings,
 ) -> str:

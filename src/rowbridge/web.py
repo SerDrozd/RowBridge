@@ -30,7 +30,7 @@ from rowbridge.ingestion import (
     staged_filename,
     write_staged_input,
 )
-from rowbridge.models import CsvTable, FieldMapping, MatchSettings, MatchStatus, RowPayload
+from rowbridge.models import FieldMapping, InputTable, MatchSettings, MatchStatus, RowPayload
 from rowbridge.service import create_reconciliation_run
 from rowbridge.storage import Repository, StoredMatch
 
@@ -61,7 +61,7 @@ def _display_value(match: StoredMatch, side: str, column: str) -> str:
     return _payload_value(payload, column)
 
 
-def _table_details(table: CsvTable) -> str:
+def _table_details(table: InputTable) -> str:
     if table.source_format == "xlsx":
         return f"Excel workbook · sheet {table.sheet_name or 'first data sheet'}"
     delimiter_names = {",": "comma", ";": "semicolon", "\t": "tab", "|": "pipe"}

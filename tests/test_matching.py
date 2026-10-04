@@ -1,4 +1,5 @@
 from decimal import Decimal
+from unittest.mock import patch
 
 from rowbridge.candidates import generate_candidates
 from rowbridge.matching import (
@@ -8,7 +9,15 @@ from rowbridge.matching import (
     score_pair,
 )
 from rowbridge.matching_utils import normalize_text, parse_amount
-from rowbridge.models import CsvTable, FieldMapping, MatchSettings, MatchStatus, RuleKind
+from rowbridge.models import (
+    CandidateGeneration,
+    CandidateScore,
+    FieldMapping,
+    InputTable,
+    MatchSettings,
+    MatchStatus,
+    RuleKind,
+)
 
 
 def test_normalize_text_removes_case_spacing_and_punctuation() -> None:
@@ -27,7 +36,7 @@ def test_normalize_text_preserves_unicode_letters() -> None:
 
 
 def test_reconcile_matches_cyrillic_primary_values() -> None:
-    table_a = CsvTable(
+    table_a = InputTable(
         filename="a.csv",
         headers=("name",),
         rows=(
@@ -39,7 +48,7 @@ def test_reconcile_matches_cyrillic_primary_values() -> None:
             },
         ),
     )
-    table_b = CsvTable(
+    table_b = InputTable(
         filename="b.csv",
         headers=("name",),
         rows=(
@@ -203,12 +212,12 @@ def test_score_pair_uses_primary_secondary_amount_and_date_evidence() -> None:
 
 def test_candidate_generation_avoids_cartesian_product_for_exact_ids() -> None:
     row_count = 200
-    table_a = CsvTable(
+    table_a = InputTable(
         filename="a.csv",
         headers=("id",),
         rows=tuple({"id": f"ITEM-{index:05d}"} for index in range(row_count)),
     )
-    table_b = CsvTable(
+    table_b = InputTable(
         filename="b.csv",
         headers=("id",),
         rows=tuple({"id": f"ITEM{index:05d}"} for index in range(row_count)),
@@ -227,12 +236,12 @@ def test_candidate_generation_avoids_cartesian_product_for_exact_ids() -> None:
 
 
 def test_support_fields_do_not_rescue_unrelated_primary_without_secondary_text() -> None:
-    table_a = CsvTable(
+    table_a = InputTable(
         filename="a.csv",
         headers=("ref", "amount", "date"),
         rows=({"ref": "INV-00126", "amount": "460.00", "date": "2026-09-30"},),
     )
-    table_b = CsvTable(
+    table_b = InputTable(
         filename="b.csv",
         headers=("ref", "amount", "date"),
         rows=({"ref": "INV-00999", "amount": "460.00", "date": "2026-09-30"},),
@@ -252,7 +261,7 @@ def test_support_fields_do_not_rescue_unrelated_primary_without_secondary_text()
 
 
 def test_secondary_text_can_rescue_mismatched_reference_for_review() -> None:
-    table_a = CsvTable(
+    table_a = InputTable(
         filename="a.csv",
         headers=("ref", "customer", "amount", "date"),
         rows=(
@@ -264,7 +273,7 @@ def test_secondary_text_can_rescue_mismatched_reference_for_review() -> None:
             },
         ),
     )
-    table_b = CsvTable(
+    table_b = InputTable(
         filename="b.csv",
         headers=("ref", "payer", "amount", "date"),
         rows=(
@@ -296,8 +305,8 @@ def test_secondary_text_can_rescue_mismatched_reference_for_review() -> None:
 
 
 def test_fallback_recovers_candidate_when_primary_blocks_do_not_overlap() -> None:
-    table_a = CsvTable(filename="a.csv", headers=("id",), rows=({"id": "XNV0012Z"},))
-    table_b = CsvTable(filename="b.csv", headers=("id",), rows=({"id": "INV00123"},))
+    table_a = InputTable(filename="a.csv", headers=("id",), rows=({"id": "XNV0012Z"},))
+    table_b = InputTable(filename="b.csv", headers=("id",), rows=({"id": "INV00123"},))
     settings = MatchSettings(review_threshold=0.5, minimum_primary_similarity=0.5)
 
     generation = generate_candidates(
@@ -312,12 +321,12 @@ def test_fallback_recovers_candidate_when_primary_blocks_do_not_overlap() -> Non
 
 
 def test_reconcile_keeps_side_b_one_to_one_and_marks_competition_for_review() -> None:
-    table_a = CsvTable(
+    table_a = InputTable(
         filename="a.csv",
         headers=("name",),
         rows=({"name": "Alpha"}, {"name": "Alpha"}),
     )
-    table_b = CsvTable(filename="b.csv", headers=("name",), rows=({"name": "Alpha"},))
+    table_b = InputTable(filename="b.csv", headers=("name",), rows=({"name": "Alpha"},))
     decisions = reconcile(
         table_a,
         table_b,
@@ -336,9 +345,53 @@ def test_reconcile_keeps_side_b_one_to_one_and_marks_competition_for_review() ->
     assert len(unmatched_a) == 1
 
 
+def test_score_ordered_resolver_is_greedy_not_global_assignment() -> None:
+    table_a = InputTable(
+        filename="a.csv",
+        headers=("id",),
+        rows=({"id": "A0"}, {"id": "A1"}),
+    )
+    table_b = InputTable(
+        filename="b.csv",
+        headers=("id",),
+        rows=({"id": "B0"}, {"id": "B1"}),
+    )
+    generation = CandidateGeneration(
+        by_a=((0, 1), (0,)),
+        possible_pairs=4,
+        generated_pairs=3,
+        fallback_rows=0,
+    )
+    scored = (
+        CandidateScore(a_index=0, b_index=0, score=0.95, evidence=()),
+        CandidateScore(a_index=0, b_index=1, score=0.94, evidence=()),
+        CandidateScore(a_index=1, b_index=0, score=0.93, evidence=()),
+    )
+
+    with (
+        patch("rowbridge.matching.generate_candidates", return_value=generation),
+        patch("rowbridge.matching._score_candidates", return_value=scored),
+    ):
+        decisions, _ = reconcile_with_diagnostics(
+            table_a,
+            table_b,
+            FieldMapping(primary_a="id", primary_b="id"),
+            MatchSettings(),
+        )
+
+    paired = [
+        (decision.a_index, decision.b_index)
+        for decision in decisions
+        if decision.a_index is not None and decision.b_index is not None
+    ]
+
+    assert paired == [(0, 0)]
+    assert scored[1].score + scored[2].score > scored[0].score
+
+
 def test_primary_only_mapping_can_auto_match_exact_values() -> None:
-    table_a = CsvTable(filename="a.csv", headers=("name",), rows=({"name": "Acme Ltd"},))
-    table_b = CsvTable(filename="b.csv", headers=("name",), rows=({"name": "ACME LTD"},))
+    table_a = InputTable(filename="a.csv", headers=("name",), rows=({"name": "Acme Ltd"},))
+    table_b = InputTable(filename="b.csv", headers=("name",), rows=({"name": "ACME LTD"},))
     decisions = reconcile(
         table_a,
         table_b,
@@ -351,8 +404,8 @@ def test_primary_only_mapping_can_auto_match_exact_values() -> None:
 
 
 def test_large_inputs_skip_unbounded_global_fuzzy_fallback() -> None:
-    table_a = CsvTable(filename="a.csv", headers=("id",), rows=({"id": "NO-MATCH-HERE"},))
-    table_b = CsvTable(
+    table_a = InputTable(filename="a.csv", headers=("id",), rows=({"id": "NO-MATCH-HERE"},))
+    table_b = InputTable(
         filename="b.csv",
         headers=("id",),
         rows=tuple({"id": f"B-{index:05d}"} for index in range(5_001)),
@@ -372,12 +425,12 @@ def test_large_inputs_skip_unbounded_global_fuzzy_fallback() -> None:
 
 def test_reconcile_scales_to_thousands_of_exact_one_to_one_candidates() -> None:
     row_count = 2_000
-    table_a = CsvTable(
+    table_a = InputTable(
         filename="a.csv",
         headers=("id",),
         rows=tuple({"id": f"ITEM-{index:05d}"} for index in range(row_count)),
     )
-    table_b = CsvTable(
+    table_b = InputTable(
         filename="b.csv",
         headers=("id",),
         rows=tuple({"id": f"ITEM{index:05d}"} for index in range(row_count)),

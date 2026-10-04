@@ -8,7 +8,7 @@ from rapidfuzz import process
 from rapidfuzz.fuzz import WRatio
 
 from rowbridge.matching_utils import normalize_text, parse_amount, parse_date
-from rowbridge.models import CandidateGeneration, CsvTable, FieldMapping, MatchSettings
+from rowbridge.models import CandidateGeneration, FieldMapping, InputTable, MatchSettings
 
 
 def _primary_block_keys(value: str) -> tuple[str, ...]:
@@ -55,8 +55,8 @@ def _add_to_index(index: dict[str, set[int]], keys: Iterable[str], row_index: in
 
 
 def generate_candidates(
-    table_a: CsvTable,
-    table_b: CsvTable,
+    table_a: InputTable,
+    table_b: InputTable,
     mapping: FieldMapping,
     settings: MatchSettings,
 ) -> CandidateGeneration:
