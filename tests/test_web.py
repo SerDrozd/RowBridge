@@ -5,6 +5,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from rowbridge import __version__
 from rowbridge.config import Settings
 from rowbridge.web import create_app
 
@@ -184,8 +185,14 @@ def test_home_file_picker_only_uses_explicit_browse_labels(tmp_path: Path) -> No
     assert 'data-file-trigger="rb-file-b"' in response.text
     assert 'hidden id="rb-file-a"' in response.text
     assert 'hidden id="rb-file-b"' in response.text
-    assert 'app.css?v=m5' in response.text
-    assert 'app.js?v=m5' in response.text
+    assert f"app.css?v={__version__}" in response.text
+    assert f"app.js?v={__version__}" in response.text
+    assert (
+        response.text.count(
+            "CSV or XLSX · up to 5 MB · up to 50,000 rows · up to 200 columns"
+        )
+        == 2
+    )
     assert 'class="file-input"' not in response.text
 
 def test_prepare_rejects_unsupported_files(tmp_path: Path) -> None:
@@ -483,6 +490,8 @@ def test_invalid_view_uses_html_error_page(tmp_path: Path) -> None:
     assert response.status_code == 400
     assert "Request could not be completed" in response.text
     assert "Unknown result view" in response.text
+    assert "Start a new reconciliation" in response.text
+    assert "Back to start" not in response.text
 
 
 def test_results_route_paginates_large_runs(tmp_path: Path) -> None:

@@ -1,24 +1,32 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- runtime version reporting now follows the package version;
+- Unicode letters are preserved during text normalization;
+- Excel datetime values participate in date matching;
+- common US and European amount formats, including accounting-style negatives, are parsed consistently;
+- optional matching rules keep their documented base weights before active weights are normalized.
+
+### Changed
+
+- matching documentation now describes the score-ordered one-to-one selection behavior precisely;
+- public documentation and UI copy were simplified and made consistent.
+
 ## 0.6.0
 
-Publication-ready portfolio release.
+Initial public release.
 
 ### Added
 
-- polished project documentation and architecture notes;
-- security policy and contribution guide;
-- repository issue and pull-request templates;
-- dependency update configuration;
-- package build verification in CI;
-- curated product screenshots.
-
-### Included from earlier milestones
-
-- CSV/XLSX ingestion and preview;
-- bounded candidate generation and deterministic scoring;
+- CSV and XLSX ingestion with preview and validation;
+- candidate generation and typed matching rules;
 - one-to-one reconciliation with ambiguity review;
-- human accept/reject/manual-link workflow and audit trail;
+- human accept, reject, and manual-link actions with audit history;
 - SQLite persistence, pagination, and large-run safeguards;
-- CSV/XLSX exports with formula-injection mitigation;
-- local web hardening and staged-file cleanup.
+- CSV and XLSX exports with formula-injection mitigation;
+- local web protections and staged-file cleanup;
+- architecture, security, and contribution documentation;
+- CI package build verification and dependency update configuration.
