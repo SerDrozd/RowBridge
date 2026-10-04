@@ -143,6 +143,7 @@ class Repository:
                     previous_status TEXT,
                     resulting_status TEXT NOT NULL,
                     score REAL,
+                    evidence_json TEXT,
                     detail TEXT NOT NULL
                 );
 
@@ -155,6 +156,14 @@ class Repository:
                     ON matches(run_id, b_row_id) WHERE b_row_id IS NOT NULL;
                 """
             )
+            review_event_columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(review_events)").fetchall()
+            }
+            if "evidence_json" not in review_event_columns:
+                connection.execute(
+                    "ALTER TABLE review_events ADD COLUMN evidence_json TEXT"
+                )
 
     def save_run(
         self,
@@ -581,6 +590,7 @@ class Repository:
                 resulting_status=MatchStatus.UNMATCHED.value,
                 score=float(row["score"]),
                 detail="Rejected proposed match; both rows returned to unmatched.",
+                evidence_json=str(row["evidence_json"]),
             )
             self._refresh_run_counts(connection, run_id)
 
@@ -645,6 +655,202 @@ class Repository:
                 detail="Linked two previously unmatched rows manually.",
             )
             self._refresh_run_counts(connection, run_id)
+
+    def reopen_confirmed(self, run_id: str, match_id: int) -> None:
+        with self._connect() as connection:
+            row = self._get_match_row(connection, run_id, match_id)
+            self._require_status(row, MatchStatus.CONFIRMED)
+            connection.execute(
+                "UPDATE matches SET status = ? WHERE id = ?",
+                (MatchStatus.REVIEW.value, match_id),
+            )
+            self._record_event(
+                connection=connection,
+                run_id=run_id,
+                action=ReviewAction.REOPEN,
+                source_match_id=match_id,
+                a_row_id=self._optional_int(row["a_row_id"]),
+                b_row_id=self._optional_int(row["b_row_id"]),
+                previous_status=MatchStatus.CONFIRMED.value,
+                resulting_status=MatchStatus.REVIEW.value,
+                score=float(row["score"]),
+                detail="Reopened confirmed match for review.",
+                evidence_json=str(row["evidence_json"]),
+            )
+            self._refresh_run_counts(connection, run_id)
+
+    def unlink_manual(self, run_id: str, match_id: int) -> None:
+        with self._connect() as connection:
+            row = self._get_match_row(connection, run_id, match_id)
+            self._require_status(row, MatchStatus.MANUAL_MATCHED)
+            a_row_id = self._optional_int(row["a_row_id"])
+            b_row_id = self._optional_int(row["b_row_id"])
+            if a_row_id is None or b_row_id is None:
+                raise ValueError("A manual match must contain one row from each side")
+
+            connection.execute("DELETE FROM matches WHERE id = ?", (match_id,))
+            self._insert_unmatched(connection, run_id, a_row_id, side="a")
+            self._insert_unmatched(connection, run_id, b_row_id, side="b")
+            self._record_event(
+                connection=connection,
+                run_id=run_id,
+                action=ReviewAction.UNLINK,
+                source_match_id=match_id,
+                a_row_id=a_row_id,
+                b_row_id=b_row_id,
+                previous_status=MatchStatus.MANUAL_MATCHED.value,
+                resulting_status=MatchStatus.UNMATCHED.value,
+                score=None,
+                detail="Unlinked manual match; both rows returned to unmatched.",
+            )
+            self._refresh_run_counts(connection, run_id)
+
+    def restore_rejected(self, run_id: str, event_id: int) -> None:
+        with self._connect() as connection:
+            event = connection.execute(
+                """
+                SELECT *
+                FROM review_events
+                WHERE id = ? AND run_id = ? AND action = ?
+                """,
+                (event_id, run_id, ReviewAction.REJECT.value),
+            ).fetchone()
+            if event is None:
+                raise ValueError("Rejected review event not found for this run")
+
+            evidence_json = event["evidence_json"]
+            if evidence_json is None:
+                raise ValueError(
+                    "This rejected proposal predates reversible review and has no saved evidence"
+                )
+
+            a_row_id = self._optional_int(event["a_row_id"])
+            b_row_id = self._optional_int(event["b_row_id"])
+            if a_row_id is None or b_row_id is None:
+                raise ValueError("Rejected proposal is missing one of its source rows")
+
+            newer_rejection = connection.execute(
+                """
+                SELECT 1
+                FROM review_events
+                WHERE run_id = ? AND action = ?
+                  AND a_row_id = ? AND b_row_id = ?
+                  AND id > ?
+                LIMIT 1
+                """,
+                (
+                    run_id,
+                    ReviewAction.REJECT.value,
+                    a_row_id,
+                    b_row_id,
+                    event_id,
+                ),
+            ).fetchone()
+            if newer_rejection is not None:
+                raise ValueError("A newer rejection exists for this proposal")
+
+            a_unmatched = connection.execute(
+                """
+                SELECT id
+                FROM matches
+                WHERE run_id = ? AND status = ?
+                  AND a_row_id = ? AND b_row_id IS NULL
+                """,
+                (run_id, MatchStatus.UNMATCHED.value, a_row_id),
+            ).fetchone()
+            b_unmatched = connection.execute(
+                """
+                SELECT id
+                FROM matches
+                WHERE run_id = ? AND status = ?
+                  AND b_row_id = ? AND a_row_id IS NULL
+                """,
+                (run_id, MatchStatus.UNMATCHED.value, b_row_id),
+            ).fetchone()
+            if a_unmatched is None or b_unmatched is None:
+                raise ValueError(
+                    "Rejected proposal can only be restored while both rows are unmatched"
+                )
+
+            score = event["score"]
+            if score is None:
+                raise ValueError("Rejected proposal is missing its original score")
+
+            connection.execute(
+                "DELETE FROM matches WHERE id IN (?, ?)",
+                (int(a_unmatched["id"]), int(b_unmatched["id"])),
+            )
+            cursor = connection.execute(
+                """
+                INSERT INTO matches (
+                    run_id, a_row_id, b_row_id, score, status, evidence_json
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    a_row_id,
+                    b_row_id,
+                    float(score),
+                    MatchStatus.REVIEW.value,
+                    str(evidence_json),
+                ),
+            )
+            if cursor.lastrowid is None:
+                raise RuntimeError("SQLite did not return a match id")
+
+            self._record_event(
+                connection=connection,
+                run_id=run_id,
+                action=ReviewAction.RESTORE_REJECTED,
+                source_match_id=cursor.lastrowid,
+                a_row_id=a_row_id,
+                b_row_id=b_row_id,
+                previous_status=MatchStatus.UNMATCHED.value,
+                resulting_status=MatchStatus.REVIEW.value,
+                score=float(score),
+                detail="Restored rejected proposal to review.",
+                evidence_json=str(evidence_json),
+            )
+            self._refresh_run_counts(connection, run_id)
+
+    def restorable_rejected_event_ids(self, run_id: str) -> frozenset[int]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT e.id
+                FROM review_events e
+                JOIN matches a_match
+                  ON a_match.run_id = e.run_id
+                 AND a_match.status = ?
+                 AND a_match.a_row_id = e.a_row_id
+                 AND a_match.b_row_id IS NULL
+                JOIN matches b_match
+                  ON b_match.run_id = e.run_id
+                 AND b_match.status = ?
+                 AND b_match.b_row_id = e.b_row_id
+                 AND b_match.a_row_id IS NULL
+                WHERE e.run_id = ?
+                  AND e.action = ?
+                  AND e.evidence_json IS NOT NULL
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM review_events newer
+                      WHERE newer.run_id = e.run_id
+                        AND newer.action = ?
+                        AND newer.a_row_id = e.a_row_id
+                        AND newer.b_row_id = e.b_row_id
+                        AND newer.id > e.id
+                  )
+                """,
+                (
+                    MatchStatus.UNMATCHED.value,
+                    MatchStatus.UNMATCHED.value,
+                    run_id,
+                    ReviewAction.REJECT.value,
+                    ReviewAction.REJECT.value,
+                ),
+            ).fetchall()
+        return frozenset(int(row["id"]) for row in rows)
 
     def list_review_events(
         self,
@@ -801,13 +1007,14 @@ class Repository:
         resulting_status: str,
         score: float | None,
         detail: str,
+        evidence_json: str | None = None,
     ) -> None:
         connection.execute(
             """
             INSERT INTO review_events (
                 run_id, created_at, action, source_match_id, a_row_id, b_row_id,
-                previous_status, resulting_status, score, detail
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                previous_status, resulting_status, score, evidence_json, detail
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 run_id,
@@ -819,6 +1026,7 @@ class Repository:
                 previous_status,
                 resulting_status,
                 score,
+                evidence_json,
                 detail,
             ),
         )

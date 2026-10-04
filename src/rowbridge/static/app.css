@@ -354,6 +354,7 @@ select:focus, input[type="number"]:focus { outline: 2px solid #bfd0e9; outline-o
 .history-item p { margin-top: 5px; font-size: 13px; line-height: 1.4; }
 .history-item small { display: block; margin-top: 7px; color: #8b948f; font-size: 11px; line-height: 1.4; }
 .history-detail { color: #6f7873; }
+.history-action { margin-top: 9px; }
 .panel-empty { margin-top: 13px; font-size: 13px; line-height: 1.45; }
 
 @media (max-width: 1050px) {

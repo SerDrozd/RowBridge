@@ -18,6 +18,9 @@ class ReviewAction(StrEnum):
     ACCEPT = "accept"
     REJECT = "reject"
     MANUAL_LINK = "manual_link"
+    REOPEN = "reopen"
+    UNLINK = "unlink"
+    RESTORE_REJECTED = "restore_rejected"
 
 
 class RuleKind(StrEnum):

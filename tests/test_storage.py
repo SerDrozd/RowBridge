@@ -4,7 +4,16 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
-from rowbridge.models import FieldMapping, MatchDecision, MatchSettings, MatchStatus
+import pytest
+
+from rowbridge.models import (
+    Evidence,
+    FieldMapping,
+    MatchDecision,
+    MatchSettings,
+    MatchStatus,
+    ReviewAction,
+)
 from rowbridge.storage import Repository
 
 
@@ -211,3 +220,215 @@ def test_delete_run_cascades_children_without_touching_other_runs(
     assert kept_matches is not None
     assert kept_source_rows[0] == 2
     assert kept_matches[0] == 1
+
+
+def _save_review_run(
+    repository: Repository,
+    run_id: str,
+    *,
+    extra_unmatched_b: bool = False,
+) -> None:
+    rows_b = ({"id": "B-1"}, {"id": "B-2"}) if extra_unmatched_b else ({"id": "B-1"},)
+    decisions = [
+        MatchDecision(
+            0,
+            0,
+            0.81,
+            MatchStatus.REVIEW,
+            (Evidence(field="primary", detail="A-1 vs B-1", score=0.81),),
+        )
+    ]
+    if extra_unmatched_b:
+        decisions.append(MatchDecision(None, 1, 0.0, MatchStatus.UNMATCHED, ()))
+
+    repository.save_run(
+        run_id=run_id,
+        created_at="2026-10-04T12:30:00+00:00",
+        filename_a="a.csv",
+        filename_b="b.csv",
+        mapping=FieldMapping(primary_a="id", primary_b="id"),
+        settings=MatchSettings(),
+        rows_a=({"id": "A-1"},),
+        rows_b=rows_b,
+        decisions=tuple(decisions),
+    )
+
+
+def test_initialize_migrates_legacy_review_events_with_evidence_column(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "legacy.sqlite3"
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE review_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                action TEXT NOT NULL,
+                source_match_id INTEGER,
+                a_row_id INTEGER,
+                b_row_id INTEGER,
+                previous_status TEXT,
+                resulting_status TEXT NOT NULL,
+                score REAL,
+                detail TEXT NOT NULL
+            )
+            """
+        )
+
+    repository = Repository(database_path)
+    repository.initialize()
+    repository.initialize()
+
+    with sqlite3.connect(database_path) as connection:
+        columns = {
+            str(row[1])
+            for row in connection.execute("PRAGMA table_info(review_events)").fetchall()
+        }
+
+    assert "evidence_json" in columns
+
+
+def test_confirmed_match_can_be_reopened_without_losing_evidence(tmp_path: Path) -> None:
+    repository = make_repository(tmp_path)
+    run_id = "1" * 32
+    _save_review_run(repository, run_id)
+
+    review = repository.list_matches(run_id, (MatchStatus.REVIEW,))[0]
+    original_evidence = review.evidence
+    repository.accept_review(run_id, review.id)
+    repository.reopen_confirmed(run_id, review.id)
+
+    reopened = repository.list_matches(run_id, (MatchStatus.REVIEW,))[0]
+    summary = repository.get_summary(run_id)
+    events = repository.list_review_events(run_id)
+
+    assert reopened.id == review.id
+    assert reopened.score == review.score
+    assert reopened.evidence == original_evidence
+    assert summary.review == 1
+    assert summary.human_matched == 0
+    assert [event.action for event in events[:2]] == [
+        ReviewAction.REOPEN,
+        ReviewAction.ACCEPT,
+    ]
+
+
+def test_manual_match_can_be_unlinked_back_to_two_unmatched_rows(tmp_path: Path) -> None:
+    repository = make_repository(tmp_path)
+    run_id = "2" * 32
+    repository.save_run(
+        run_id=run_id,
+        created_at="2026-10-04T12:31:00+00:00",
+        filename_a="a.csv",
+        filename_b="b.csv",
+        mapping=FieldMapping(primary_a="id", primary_b="id"),
+        settings=MatchSettings(),
+        rows_a=({"id": "A-1"},),
+        rows_b=({"id": "B-1"},),
+        decisions=(
+            MatchDecision(0, None, 0.0, MatchStatus.UNMATCHED, ()),
+            MatchDecision(None, 0, 0.0, MatchStatus.UNMATCHED, ()),
+        ),
+    )
+    a_match = repository.list_unmatched_side(run_id, "a", limit=1)[0]
+    b_match = repository.list_unmatched_side(run_id, "b", limit=1)[0]
+    repository.create_manual_link(run_id, a_match.id, b_match.id)
+
+    manual = repository.list_matches(run_id, (MatchStatus.MANUAL_MATCHED,))[0]
+    repository.unlink_manual(run_id, manual.id)
+
+    summary = repository.get_summary(run_id)
+    events = repository.list_review_events(run_id)
+
+    assert repository.count_unmatched_side(run_id, "a") == 1
+    assert repository.count_unmatched_side(run_id, "b") == 1
+    assert summary.unmatched == 2
+    assert summary.human_matched == 0
+    assert [event.action for event in events[:2]] == [
+        ReviewAction.UNLINK,
+        ReviewAction.MANUAL_LINK,
+    ]
+
+
+def test_rejected_proposal_can_be_restored_with_original_score_and_evidence(
+    tmp_path: Path,
+) -> None:
+    repository = make_repository(tmp_path)
+    run_id = "3" * 32
+    _save_review_run(repository, run_id)
+
+    original = repository.list_matches(run_id, (MatchStatus.REVIEW,))[0]
+    repository.reject_review(run_id, original.id)
+    rejected = repository.list_review_events(run_id)[0]
+
+    assert rejected.action == ReviewAction.REJECT
+    assert rejected.id in repository.restorable_rejected_event_ids(run_id)
+
+    repository.restore_rejected(run_id, rejected.id)
+
+    restored = repository.list_matches(run_id, (MatchStatus.REVIEW,))[0]
+    summary = repository.get_summary(run_id)
+    events = repository.list_review_events(run_id)
+
+    assert restored.score == original.score
+    assert restored.evidence == original.evidence
+    assert summary.review == 1
+    assert summary.unmatched == 0
+    assert repository.restorable_rejected_event_ids(run_id) == frozenset()
+    assert [event.action for event in events[:2]] == [
+        ReviewAction.RESTORE_REJECTED,
+        ReviewAction.REJECT,
+    ]
+
+
+def test_rejected_proposal_cannot_be_restored_after_a_row_is_reused(
+    tmp_path: Path,
+) -> None:
+    repository = make_repository(tmp_path)
+    run_id = "4" * 32
+    _save_review_run(repository, run_id, extra_unmatched_b=True)
+
+    review = repository.list_matches(run_id, (MatchStatus.REVIEW,))[0]
+    repository.reject_review(run_id, review.id)
+    rejected = repository.list_review_events(run_id)[0]
+
+    a_match = repository.get_unmatched_match_by_row(run_id, "a", 2)
+    other_b_match = repository.get_unmatched_match_by_row(run_id, "b", 3)
+    assert a_match is not None
+    assert other_b_match is not None
+    repository.create_manual_link(run_id, a_match.id, other_b_match.id)
+
+    assert rejected.id not in repository.restorable_rejected_event_ids(run_id)
+    with pytest.raises(ValueError, match="both rows are unmatched"):
+        repository.restore_rejected(run_id, rejected.id)
+
+    assert repository.count_matches(run_id, (MatchStatus.MANUAL_MATCHED,)) == 1
+    assert repository.count_unmatched_side(run_id, "b") == 1
+
+
+def test_only_latest_rejection_for_same_pair_can_be_restored(tmp_path: Path) -> None:
+    repository = make_repository(tmp_path)
+    run_id = "5" * 32
+    _save_review_run(repository, run_id)
+
+    first_review = repository.list_matches(run_id, (MatchStatus.REVIEW,))[0]
+    repository.reject_review(run_id, first_review.id)
+    first_rejection = repository.list_review_events(run_id)[0]
+    repository.restore_rejected(run_id, first_rejection.id)
+
+    restored_review = repository.list_matches(run_id, (MatchStatus.REVIEW,))[0]
+    repository.reject_review(run_id, restored_review.id)
+    events = repository.list_review_events(run_id)
+    rejection_events = [
+        event for event in events if event.action == ReviewAction.REJECT
+    ]
+    second_rejection = rejection_events[0]
+
+    assert second_rejection.id != first_rejection.id
+    assert repository.restorable_rejected_event_ids(run_id) == frozenset(
+        {second_rejection.id}
+    )
+    with pytest.raises(ValueError, match="newer rejection"):
+        repository.restore_rejected(run_id, first_rejection.id)

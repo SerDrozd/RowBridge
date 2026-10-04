@@ -45,7 +45,20 @@
               <td class="record">{% if match.a_payload %}<strong>{{ display_value(match, 'a', run.mapping.primary_a) }}</strong><small>row {{ match.a_row_number }}</small>{% else %}<span class="muted">No row</span>{% endif %}</td>
               <td class="record">{% if match.b_payload %}<strong>{{ display_value(match, 'b', run.mapping.primary_b) }}</strong><small>row {{ match.b_row_number }}</small>{% else %}<span class="muted">No row</span>{% endif %}</td>
               <td>{% if match.evidence %}<dl class="evidence-list">{% for item in match.evidence %}<div><dt>{{ item.field|replace('_', ' ') }}</dt><dd>{{ item.detail }}{% if item.score %}<em>+{{ "%.0f"|format(item.score * 100) }}</em>{% endif %}</dd></div>{% endfor %}</dl>{% else %}<span class="muted">No candidate above review threshold.</span>{% endif %}</td>
-              <td>{% if match.status.value == 'review' %}<div class="row-actions"><form method="post" action="/runs/{{ run.id }}/matches/{{ match.id }}/accept"><button class="mini-button mini-primary" type="submit">Accept</button></form><form method="post" action="/runs/{{ run.id }}/matches/{{ match.id }}/reject"><button class="mini-button mini-danger" type="submit">Reject</button></form></div>{% else %}<span class="muted">No action</span>{% endif %}</td>
+              <td>
+                {% if match.status.value == 'review' %}
+                <div class="row-actions">
+                  <form method="post" action="/runs/{{ run.id }}/matches/{{ match.id }}/accept"><button class="mini-button mini-primary" type="submit">Accept</button></form>
+                  <form method="post" action="/runs/{{ run.id }}/matches/{{ match.id }}/reject"><button class="mini-button mini-danger" type="submit">Reject</button></form>
+                </div>
+                {% elif match.status.value == 'confirmed' %}
+                <form method="post" action="/runs/{{ run.id }}/matches/{{ match.id }}/reopen"><button class="mini-button" type="submit">Reopen review</button></form>
+                {% elif match.status.value == 'manual_matched' %}
+                <form method="post" action="/runs/{{ run.id }}/matches/{{ match.id }}/unlink"><button class="mini-button" type="submit">Unlink</button></form>
+                {% else %}
+                <span class="muted">No action</span>
+                {% endif %}
+              </td>
             </tr>
           {% else %}<tr><td colspan="6" class="empty-state">No rows in this view.</td></tr>{% endfor %}
           </tbody>
@@ -96,6 +109,11 @@
               <p>{% if event.a_payload %}{{ payload_value(event.a_payload, run.mapping.primary_a) }}{% else %}No Side A row{% endif %} ↔ {% if event.b_payload %}{{ payload_value(event.b_payload, run.mapping.primary_b) }}{% else %}No Side B row{% endif %}</p>
               <p class="history-detail">{{ event.detail }}</p>
               <small>{{ event.previous_status or 'none' }} → {{ event.resulting_status }} · {{ event.created_at }}</small>
+              {% if event.id in restorable_rejected_event_ids %}
+              <form class="history-action" method="post" action="/runs/{{ run.id }}/review-events/{{ event.id }}/restore">
+                <button class="mini-button" type="submit">Restore proposal</button>
+              </form>
+              {% endif %}
             </article>
           {% endfor %}{% else %}<p class="muted panel-empty">No human decisions yet.</p>{% endif %}
         </div>
