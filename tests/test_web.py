@@ -66,6 +66,137 @@ def review_match_id(html: str) -> int:
     return int(match.group(1))
 
 
+def test_runs_page_shows_empty_state_and_header_link(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+
+    home = client.get("/")
+    history = client.get("/runs")
+
+    assert home.status_code == 200
+    assert 'href="/runs">Runs</a>' in home.text
+    assert history.status_code == 200
+    assert "Reconciliation runs" in history.text
+    assert "No saved runs" in history.text
+    assert "Start a reconciliation" in history.text
+
+    missing = client.get("/runs?page=2")
+    assert missing.status_code == 404
+    assert "Run history page not found" in missing.text
+
+
+def test_runs_page_lists_saved_run_with_current_summary(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    location = create_sample_run(client)
+    results = client.get(location)
+    match_id = review_match_id(results.text)
+    accepted = client.post(
+        f"{location}/matches/{match_id}/accept",
+        follow_redirects=False,
+    )
+    assert accepted.status_code == 303
+
+    history = client.get("/runs")
+
+    assert history.status_code == 200
+    assert "orders.csv" in history.text
+    assert "payments.csv" in history.text
+    assert f'href="{location}">Open</a>' in history.text
+    assert '<span class="run-count run-count-good">1</span>' in history.text
+    assert '<span class="run-count run-count-review">0</span>' in history.text
+
+
+def test_runs_page_paginates_and_rejects_out_of_range_pages(tmp_path: Path) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from rowbridge.models import FieldMapping, MatchDecision, MatchSettings, MatchStatus
+    from rowbridge.storage import Repository
+
+    settings = Settings(data_dir=tmp_path / "data", runs_page_size=2)
+    client = TestClient(create_app(settings))
+    repository = Repository(settings.database_path)
+
+    for index in range(3):
+        repository.save_run(
+            run_id=str(index) * 32,
+            created_at=(datetime(2026, 10, 4, 9, tzinfo=UTC) + timedelta(hours=index)).isoformat(
+                timespec="seconds"
+            ),
+            filename_a=f"a-{index}.csv",
+            filename_b=f"b-{index}.csv",
+            mapping=FieldMapping(primary_a="id", primary_b="id"),
+            settings=MatchSettings(),
+            rows_a=({"id": f"A-{index}"},),
+            rows_b=({"id": f"B-{index}"},),
+            decisions=(MatchDecision(0, 0, 1.0, MatchStatus.AUTO_MATCHED, ()),),
+        )
+
+    first = client.get("/runs")
+    second = client.get("/runs?page=2")
+    missing = client.get("/runs?page=3")
+
+    assert first.status_code == 200
+    assert "a-2.csv" in first.text
+    assert "a-1.csv" in first.text
+    assert "a-0.csv" not in first.text
+    assert 'href="/runs?page=2">Next</a>' in first.text
+
+    assert second.status_code == 200
+    assert "a-0.csv" in second.text
+    assert "a-2.csv" not in second.text
+    assert 'href="/runs?page=1">Previous</a>' in second.text
+
+    assert missing.status_code == 404
+    assert "Run history page not found" in missing.text
+
+
+def test_delete_run_confirmation_shows_run_and_cancel_link(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    location = create_sample_run(client)
+
+    history = client.get("/runs")
+    confirmation = client.get(f"{location}/delete")
+
+    assert history.status_code == 200
+    assert f'href="{location}/delete">Delete</a>' in history.text
+    assert confirmation.status_code == 200
+    assert "Delete this reconciliation run?" in confirmation.text
+    assert "orders.csv" in confirmation.text
+    assert "payments.csv" in confirmation.text
+    assert f'href="{location}">Cancel</a>' in confirmation.text
+    assert f'action="{location}/delete"' in confirmation.text
+
+
+def test_delete_run_post_removes_run_and_redirects_to_history(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    deleted_location = create_sample_run(client)
+    kept_location = create_sample_run(client)
+
+    deleted = client.post(f"{deleted_location}/delete", follow_redirects=False)
+
+    assert deleted.status_code == 303
+    assert deleted.headers["location"] == "/runs"
+    assert client.get(deleted_location).status_code == 404
+    assert client.get(kept_location).status_code == 200
+
+    history = client.get("/runs")
+    assert history.status_code == 200
+    assert history.text.count("orders.csv") == 1
+    assert history.text.count("payments.csv") == 1
+
+
+def test_delete_missing_run_returns_not_found(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    missing = "f" * 32
+
+    confirmation = client.get(f"/runs/{missing}/delete")
+    deleted = client.post(f"/runs/{missing}/delete", follow_redirects=False)
+
+    assert confirmation.status_code == 404
+    assert deleted.status_code == 404
+    assert "Run not found" in confirmation.text
+    assert "Run not found" in deleted.text
+
+
 def test_vertical_slice_upload_map_persist_render_and_export(tmp_path: Path) -> None:
     client = make_client(tmp_path)
     location = create_sample_run(client)

@@ -291,6 +291,50 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         discard_staged_upload(stage_dir)
         return RedirectResponse(url=f"/runs/{run_id}", status_code=303)
 
+    @app.get("/runs", response_class=HTMLResponse)
+    def run_history(request: Request, page: int = 1) -> HTMLResponse:
+        if page < 1:
+            raise HTTPException(status_code=400, detail="Page number must be positive")
+
+        total_runs = repository.count_runs()
+        page_size = app_settings.runs_page_size
+        total_pages = max(1, math.ceil(total_runs / page_size))
+        if page > total_pages:
+            raise HTTPException(status_code=404, detail="Run history page not found")
+
+        runs = repository.list_runs(
+            limit=page_size,
+            offset=(page - 1) * page_size,
+        )
+        return templates.TemplateResponse(
+            request=request,
+            name="runs.html",
+            context={
+                "runs": runs,
+                "page": page,
+                "total_pages": total_pages,
+                "total_runs": total_runs,
+                "pagination_pages": _pagination_window(page, total_pages),
+            },
+        )
+
+    @app.get("/runs/{run_id}/delete", response_class=HTMLResponse)
+    def confirm_delete_run(request: Request, run_id: str) -> HTMLResponse:
+        run = repository.get_run(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        return templates.TemplateResponse(
+            request=request,
+            name="delete_run.html",
+            context={"run": run},
+        )
+
+    @app.post("/runs/{run_id}/delete")
+    def delete_run(run_id: str) -> RedirectResponse:
+        if not repository.delete_run(run_id):
+            raise HTTPException(status_code=404, detail="Run not found")
+        return RedirectResponse(url="/runs", status_code=303)
+
     @app.get("/runs/{run_id}", response_class=HTMLResponse)
     def results(
         request: Request,

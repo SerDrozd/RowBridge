@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}Runs | RowBridge{% endblock %}
+{% block content %}
+<section class="page runs-page">
+  <header class="runs-heading">
+    <div>
+      <p class="eyebrow">Saved locally</p>
+      <h1>Reconciliation runs</h1>
+      <p class="lead">Open previous results stored in this RowBridge data directory.</p>
+    </div>
+    <a class="button button-primary" href="/">New reconciliation</a>
+  </header>
+
+  {% if runs %}
+  <div class="runs-card">
+    <div class="runs-card-head">
+      <p><strong>{{ total_runs }}</strong> saved run{% if total_runs != 1 %}s{% endif %}</p>
+      <p>Newest first</p>
+    </div>
+    <div class="table-scroll">
+      <table class="data-table runs-table">
+        <thead>
+          <tr>
+            <th>Created</th>
+            <th>Files</th>
+            <th>Rows</th>
+            <th>Auto</th>
+            <th>Human</th>
+            <th>Review</th>
+            <th>Unmatched</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for run in runs %}
+          <tr>
+            <td>
+              <strong class="run-date">{{ run.created_at[:10] }}</strong>
+              <small class="run-time">{{ run.created_at[11:19] }} UTC</small>
+            </td>
+            <td class="run-files">
+              <strong>{{ run.filename_a }}</strong>
+              <span>→</span>
+              <strong>{{ run.filename_b }}</strong>
+            </td>
+            <td><span class="run-row-count">{{ run.total_a }} + {{ run.total_b }}</span></td>
+            <td><span class="run-count run-count-good">{{ run.auto_matched }}</span></td>
+            <td><span class="run-count run-count-good">{{ run.human_matched }}</span></td>
+            <td><span class="run-count run-count-review">{{ run.review }}</span></td>
+            <td><span class="run-count run-count-unmatched">{{ run.unmatched }}</span></td>
+            <td class="run-open-cell">
+              <div class="run-actions">
+                <a class="mini-button" href="/runs/{{ run.id }}">Open</a>
+                <a class="mini-button mini-danger" href="/runs/{{ run.id }}/delete">Delete</a>
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    {% if total_pages > 1 %}
+    <nav class="pagination" aria-label="Run history pages">
+      {% if page > 1 %}
+      <a href="/runs?page={{ page - 1 }}">Previous</a>
+      {% endif %}
+      {% for page_number in pagination_pages %}
+      <a href="/runs?page={{ page_number }}" class="{% if page_number == page %}active{% endif %}">
+        {{ page_number }}
+      </a>
+      {% endfor %}
+      {% if page < total_pages %}
+      <a href="/runs?page={{ page + 1 }}">Next</a>
+      {% endif %}
+    </nav>
+    {% endif %}
+  </div>
+  {% else %}
+  <div class="runs-empty">
+    <p class="eyebrow">No saved runs</p>
+    <h2>Your reconciliation history will appear here.</h2>
+    <p>Start a reconciliation and RowBridge will keep the result in the local data directory.</p>
+    <a class="button button-primary" href="/">Start a reconciliation</a>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}
