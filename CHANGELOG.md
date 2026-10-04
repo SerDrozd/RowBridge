@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.8.0 - 2026-10-04
+
+### Added
+
+- confirmed matches can be reopened for review;
+- manual matches can be unlinked back into unmatched rows;
+- rejected proposals can be restored when both original rows are still unmatched.
+
+### Changed
+
+- restored proposals keep their original algorithmic score and evidence;
+- review history records reopen, unlink, and restore actions;
+- existing local databases are migrated compatibly to store rejected-proposal evidence.
+
 ## 0.7.0 - 2026-10-04
 
 ### Added
