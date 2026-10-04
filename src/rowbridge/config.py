@@ -10,6 +10,7 @@ class Settings:
     data_dir: Path
     stage_ttl_seconds: int = 24 * 60 * 60
     results_page_size: int = 100
+    runs_page_size: int = 25
     manual_link_select_limit: int = 200
 
     @property
