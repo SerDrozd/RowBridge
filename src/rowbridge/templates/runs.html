@@ -49,7 +49,10 @@
             <td><span class="run-count run-count-review">{{ run.review }}</span></td>
             <td><span class="run-count run-count-unmatched">{{ run.unmatched }}</span></td>
             <td class="run-open-cell">
-              <a class="mini-button" href="/runs/{{ run.id }}">Open</a>
+              <div class="run-actions">
+                <a class="mini-button" href="/runs/{{ run.id }}">Open</a>
+                <a class="mini-button mini-danger" href="/runs/{{ run.id }}/delete">Delete</a>
+              </div>
             </td>
           </tr>
           {% endfor %}

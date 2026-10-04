@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Delete run | RowBridge{% endblock %}
+{% block content %}
+<section class="page delete-run-page">
+  <div class="delete-run-panel">
+    <p class="eyebrow">Delete saved run</p>
+    <h1>Delete this reconciliation run?</h1>
+    <p class="delete-run-warning">
+      This permanently removes the saved result, source rows, matches, and review history from this local RowBridge data directory.
+    </p>
+
+    <dl class="delete-run-details">
+      <div>
+        <dt>Files</dt>
+        <dd>{{ run.filename_a }} <span>→</span> {{ run.filename_b }}</dd>
+      </div>
+      <div>
+        <dt>Created</dt>
+        <dd>{{ run.created_at[:10] }} {{ run.created_at[11:19] }} UTC</dd>
+      </div>
+      <div>
+        <dt>Source rows</dt>
+        <dd>{{ run.total_a }} + {{ run.total_b }}</dd>
+      </div>
+    </dl>
+
+    <div class="delete-run-actions">
+      <a class="button" href="/runs/{{ run.id }}">Cancel</a>
+      <form method="post" action="/runs/{{ run.id }}/delete">
+        <button class="button button-danger" type="submit">Delete run</button>
+      </form>
+    </div>
+  </div>
+</section>
+{% endblock %}

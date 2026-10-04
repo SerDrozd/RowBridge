@@ -149,6 +149,54 @@ def test_runs_page_paginates_and_rejects_out_of_range_pages(tmp_path: Path) -> N
     assert "Run history page not found" in missing.text
 
 
+def test_delete_run_confirmation_shows_run_and_cancel_link(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    location = create_sample_run(client)
+
+    history = client.get("/runs")
+    confirmation = client.get(f"{location}/delete")
+
+    assert history.status_code == 200
+    assert f'href="{location}/delete">Delete</a>' in history.text
+    assert confirmation.status_code == 200
+    assert "Delete this reconciliation run?" in confirmation.text
+    assert "orders.csv" in confirmation.text
+    assert "payments.csv" in confirmation.text
+    assert f'href="{location}">Cancel</a>' in confirmation.text
+    assert f'action="{location}/delete"' in confirmation.text
+
+
+def test_delete_run_post_removes_run_and_redirects_to_history(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    deleted_location = create_sample_run(client)
+    kept_location = create_sample_run(client)
+
+    deleted = client.post(f"{deleted_location}/delete", follow_redirects=False)
+
+    assert deleted.status_code == 303
+    assert deleted.headers["location"] == "/runs"
+    assert client.get(deleted_location).status_code == 404
+    assert client.get(kept_location).status_code == 200
+
+    history = client.get("/runs")
+    assert history.status_code == 200
+    assert history.text.count("orders.csv") == 1
+    assert history.text.count("payments.csv") == 1
+
+
+def test_delete_missing_run_returns_not_found(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    missing = "f" * 32
+
+    confirmation = client.get(f"/runs/{missing}/delete")
+    deleted = client.post(f"/runs/{missing}/delete", follow_redirects=False)
+
+    assert confirmation.status_code == 404
+    assert deleted.status_code == 404
+    assert "Run not found" in confirmation.text
+    assert "Run not found" in deleted.text
+
+
 def test_vertical_slice_upload_map_persist_render_and_export(tmp_path: Path) -> None:
     client = make_client(tmp_path)
     location = create_sample_run(client)

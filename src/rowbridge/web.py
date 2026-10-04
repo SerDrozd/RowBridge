@@ -318,6 +318,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             },
         )
 
+    @app.get("/runs/{run_id}/delete", response_class=HTMLResponse)
+    def confirm_delete_run(request: Request, run_id: str) -> HTMLResponse:
+        run = repository.get_run(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        return templates.TemplateResponse(
+            request=request,
+            name="delete_run.html",
+            context={"run": run},
+        )
+
+    @app.post("/runs/{run_id}/delete")
+    def delete_run(run_id: str) -> RedirectResponse:
+        if not repository.delete_run(run_id):
+            raise HTTPException(status_code=404, detail="Run not found")
+        return RedirectResponse(url="/runs", status_code=303)
+
     @app.get("/runs/{run_id}", response_class=HTMLResponse)
     def results(
         request: Request,
